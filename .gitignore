@@ -14,6 +14,8 @@ repl_state
 dataset_files
 report_files
 .venv
+.harbor-venv
+*.egg-info
 *.DS_Store*
 uv.lock
 .claude
