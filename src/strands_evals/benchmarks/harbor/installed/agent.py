@@ -206,6 +206,17 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             except ValueError:
                 pass
 
+        # Forward OTEL config so the agent's spans reach the user's collector
+        for var in (
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_SERVICE_NAME",
+        ):
+            value = self._get_env(var)
+            if value:
+                env[var] = value
+
         # MCP server info — append to instruction (same pattern as mini_swe, hermes)
         if self.mcp_servers:
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available.\n"
@@ -288,7 +299,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             trajectory = convert_strands_to_atif(
                 messages,
                 agent_name=self.name(),
-                agent_version=self.version() or "unknown",
+                agent_version=result_data.get("strands_version") or self.version() or "unknown",
                 model_name=self.model_name,
                 result_data=result_data,
             )

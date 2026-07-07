@@ -15,6 +15,7 @@ dataset_files
 report_files
 .venv
 .harbor-venv
+jobs/
 *.egg-info
 *.DS_Store*
 uv.lock

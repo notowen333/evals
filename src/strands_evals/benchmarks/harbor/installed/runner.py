@@ -95,6 +95,19 @@ def main() -> int:
     metrics = agent.event_loop_metrics
     usage = metrics.accumulated_usage if metrics else {}
 
+    # Strands version for ATIF agent metadata
+    try:
+        from importlib.metadata import version as pkg_version
+
+        strands_version = pkg_version("strands-agents")
+    except Exception:
+        strands_version = None
+
+    # Per-cycle timestamps from traces
+    cycle_timestamps = []
+    for trace in getattr(metrics, "traces", []):
+        cycle_timestamps.append({"start_time": trace.start_time, "end_time": trace.end_time})
+
     _write_result(
         output_path,
         {
@@ -104,6 +117,8 @@ def main() -> int:
             "stop_reason": getattr(result, "stop_reason", None),
             "cycle_count": getattr(metrics, "cycle_count", None),
             "accumulated_usage": dict(usage) if usage else None,
+            "strands_version": strands_version,
+            "cycle_timestamps": cycle_timestamps,
         },
     )
 

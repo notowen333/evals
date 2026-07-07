@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from harbor.models.trajectories import (
@@ -97,6 +98,8 @@ def convert_strands_to_atif(
     """
     steps: list[Step] = []
     step_id = 0
+    cycle_timestamps = (result_data or {}).get("cycle_timestamps", [])
+    cycle_idx = 0
 
     for msg in messages:
         role = msg.get("role", "")
@@ -136,11 +139,21 @@ def convert_strands_to_atif(
                     cached_tokens=usage.get("cacheReadInputTokens"),
                 )
 
+            # Timestamp from cycle traces (one cycle per assistant message)
+            timestamp = None
+            if cycle_idx < len(cycle_timestamps):
+                ts = cycle_timestamps[cycle_idx]
+                start = ts.get("start_time")
+                if start:
+                    timestamp = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
+                cycle_idx += 1
+
             steps.append(
                 Step(
                     step_id=step_id,
                     source="agent",
                     message=text or "(tool calls)",
+                    timestamp=timestamp,
                     reasoning_content=reasoning,
                     tool_calls=tool_calls if tool_calls else None,
                     metrics=step_metrics,
