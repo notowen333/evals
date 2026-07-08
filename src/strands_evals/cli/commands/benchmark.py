@@ -117,6 +117,10 @@ def _build_harbor_command(args: argparse.Namespace) -> list[str]:
     for key, value in aws_env.items():
         cmd.extend(["--ae", f"{key}={value}"])
 
+    # Job name: explicit --name sets the harbor job directory name
+    if args.name:
+        cmd.extend(["--job-name", args.name])
+
     # Pass through all remaining harbor flags
     cmd.extend(args.harbor_args)
 
@@ -221,6 +225,12 @@ def add_subparser(
         "agent_file",
         metavar="AGENT_DIR",
         help="directory containing a .py file that defines `create_agent()` returning a Strands Agent",
+    )
+    parser.add_argument(
+        "--name",
+        metavar="NAME",
+        default=None,
+        help="name for this benchmark run (used as the job directory name)",
     )
     parser.add_argument(
         "-o", "--output",

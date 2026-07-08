@@ -95,7 +95,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         agent_module: str = "agent:agent",
         agent_path: str | None = None,
         agent_deps: str = "strands-agents-tools",
-        strands_version: str = ">=1.42.0",
+        strands_version: str = ">=1.45.0",
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, **kwargs)
