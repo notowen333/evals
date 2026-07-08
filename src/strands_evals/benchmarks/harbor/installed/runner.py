@@ -91,6 +91,31 @@ def main() -> int:
     except Exception:
         pass  # fall back to agent.messages if plugin fails
 
+    # Register a signal handler so that on timeout (SIGTERM from Harbor),
+    # we dump whatever we have before dying. Without this, timeouts lose
+    # all conversation data and metrics.
+    import signal
+
+    def _on_sigterm(signum, frame):
+        metrics = getattr(agent, "event_loop_metrics", None)
+        usage = getattr(metrics, "accumulated_usage", {}) if metrics else {}
+        _write_result(
+            output_path,
+            {
+                "error": "Agent timed out (SIGTERM)",
+                "stop_reason": "timeout",
+                "input_tokens": usage.get("inputTokens"),
+                "output_tokens": usage.get("outputTokens"),
+                "cache_tokens": usage.get("cacheReadInputTokens"),
+                "cycle_count": getattr(metrics, "cycle_count", None),
+                "accumulated_usage": dict(usage) if usage else None,
+            },
+        )
+        _dump_conversation(output_path.parent, all_messages, agent)
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     # Apply max_turns if provided and the agent supports limits
     invoke_kwargs: dict = {}
     if args.max_turns is not None:
