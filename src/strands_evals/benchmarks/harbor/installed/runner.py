@@ -24,7 +24,11 @@ from pathlib import Path
 
 
 def _import_agent(agent_spec: str):
-    """Import 'module:function' and call it to get a fresh Agent instance."""
+    """Import 'module:function', call it to get a fresh Agent instance.
+
+    Also checks if the module defines an `invoke_agent(agent, instruction, **kwargs)` function.
+    Returns (agent_instance, invoke_agent_fn or None).
+    """
     if ":" not in agent_spec:
         raise ValueError(f"agent_spec must be 'module:function', got: {agent_spec!r}")
     module_path, func_name = agent_spec.rsplit(":", 1)
@@ -32,7 +36,12 @@ def _import_agent(agent_spec: str):
     factory = getattr(mod, func_name)
     if not callable(factory):
         raise TypeError(f"{agent_spec} is not callable — agent.py must define a function `create_agent()`")
-    return factory()
+
+    invoke_agent_fn = getattr(mod, "invoke_agent", None)
+    if invoke_agent_fn is not None and not callable(invoke_agent_fn):
+        invoke_agent_fn = None
+
+    return factory(), invoke_agent_fn
 
 
 def _write_result(output_path: Path, data: dict) -> None:
@@ -71,7 +80,7 @@ def main() -> int:
         sys.path.insert(0, cwd)
 
     try:
-        agent = _import_agent(args.agent)
+        agent, invoke_agent_fn = _import_agent(args.agent)
     except Exception:
         traceback.print_exc()
         _write_result(output_path, {"error": traceback.format_exc(), "stop_reason": "import_error"})
@@ -134,7 +143,10 @@ def main() -> int:
             pass
 
     try:
-        result = agent(args.instruction, **invoke_kwargs)
+        if invoke_agent_fn is not None:
+            result = invoke_agent_fn(agent, args.instruction, **invoke_kwargs)
+        else:
+            result = agent(args.instruction, **invoke_kwargs)
     except Exception:
         traceback.print_exc()
         # Still try to capture partial metrics

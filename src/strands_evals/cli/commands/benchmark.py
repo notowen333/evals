@@ -125,17 +125,44 @@ def _find_harbor() -> str | None:
     return shutil.which("harbor")
 
 
+def _find_latest_job_dir(output_dir: Path) -> Path | None:
+    """Find the most recent job subdirectory in the output dir."""
+    if not output_dir.exists():
+        return None
+    subdirs = [d for d in sorted(output_dir.iterdir(), reverse=True) if d.is_dir()]
+    return subdirs[0] if subdirs else None
+
+
 def _run(args: argparse.Namespace) -> int:
     harbor = _find_harbor()
     if not harbor:
         print("strands-evals: error: 'harbor' CLI not found. Install with: pip install harbor", file=sys.stderr)  # noqa: T201
         return 2
 
+    # Resolve output dir: explicit -o or default to ./jobs
+    output_dir = Path(args.output) if args.output else Path("jobs")
+
     cmd = _build_harbor_command(args)
     cmd[0] = harbor  # replace "harbor" with resolved path
+
+    # Inject -o if the user specified it (otherwise harbor defaults to ./jobs)
+    if args.output:
+        cmd.extend(["-o", str(output_dir)])
+
     logger.debug("harbor command: %s", " ".join(cmd))
 
     result = subprocess.run(cmd)
+
+    # Post-run callback
+    if args.post_run:
+        job_dir = _find_latest_job_dir(output_dir)
+        if job_dir:
+            post_cmd = args.post_run.replace("{job_dir}", str(job_dir))
+            logger.debug("post-run: %s", post_cmd)
+            subprocess.run(post_cmd, shell=True)
+        else:
+            logger.warning("no job directory found in %s for post-run command", output_dir)
+
     return result.returncode
 
 
@@ -158,6 +185,18 @@ def add_subparser(
         "agent_file",
         metavar="AGENT_DIR",
         help="directory containing a .py file that defines `create_agent()` returning a Strands Agent",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        metavar="DIR",
+        default=None,
+        help="directory to store job results (default: ./jobs)",
+    )
+    parser.add_argument(
+        "--post-run",
+        metavar="CMD",
+        default=None,
+        help="command to run after the job completes. {job_dir} is replaced with the results path.",
     )
     parser.add_argument(
         "--deps",
