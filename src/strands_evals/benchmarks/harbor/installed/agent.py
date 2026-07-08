@@ -173,6 +173,10 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             if self._agent_path.is_dir():
                 await environment.upload_dir(source_dir=self._agent_path, target_dir=_AGENT_INSTALL_DIR)
                 await environment.upload_dir(source_dir=self._agent_path, target_dir=agent_logs_source)
+                await environment.exec(
+                    f"find {_AGENT_INSTALL_DIR} {agent_logs_source} -name '__pycache__' -type d -exec rm -rf {{}} + 2>/dev/null; true",
+                    timeout_sec=5,
+                )
             else:
                 target = f"{_AGENT_INSTALL_DIR}/{self._agent_path.name}"
                 await environment.upload_file(source_path=self._agent_path, target_path=target)

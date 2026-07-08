@@ -62,7 +62,7 @@ class MyAgent:
         sandbox = NotASandboxLocalEnvironment()
 
         return Agent(
-            model=BedrockModel(model_id=model_id, cache_config={"mode": "default"}),
+            model=BedrockModel(model_id=model_id, cache_config={"strategy": "auto"}),
             system_prompt=SYSTEM_PROMPT,
             tools=[make_bash(sandbox=sandbox), make_file_editor(sandbox=sandbox)],
             context_manager="auto",
