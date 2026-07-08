@@ -31,7 +31,7 @@ def _import_agent(agent_spec: str):
     mod = import_module(module_path)
     factory = getattr(mod, func_name)
     if not callable(factory):
-        raise TypeError(f"{agent_spec} is not callable — agent.py must define a function `provide_agent()`")
+        raise TypeError(f"{agent_spec} is not callable — agent.py must define a function `create_agent()`")
     return factory()
 
 
