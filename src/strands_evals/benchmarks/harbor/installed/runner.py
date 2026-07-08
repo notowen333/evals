@@ -60,6 +60,24 @@ def main() -> int:
         _write_result(output_path, {"error": traceback.format_exc(), "stop_reason": "import_error"})
         return 1
 
+    # Record all messages as they happen (conversation managers truncate agent.messages,
+    # so we can't rely on the final list being complete for long runs).
+    all_messages: list = []
+    try:
+        from strands.hooks import MessageAddedEvent
+        from strands.plugins import Plugin, hook
+
+        class _MessageRecorder(Plugin):
+            name = "harbor-message-recorder"
+
+            @hook  # type: ignore[call-overload]
+            def on_message(self, event: MessageAddedEvent) -> None:
+                all_messages.append(event.message)
+
+        agent.load_plugin(_MessageRecorder())
+    except Exception:
+        pass  # fall back to agent.messages if plugin fails
+
     # Apply max_turns if provided and the agent supports limits
     invoke_kwargs: dict = {}
     if args.max_turns is not None:
@@ -122,10 +140,12 @@ def main() -> int:
         },
     )
 
-    # Write the full conversation for ATIF trajectory conversion
+    # Write the full conversation for ATIF trajectory conversion.
+    # Use all_messages (recorded via hook) to avoid truncation from conversation managers.
     conversation_path = output_path.parent / "conversation.json"
     try:
-        json.dump(agent.messages, conversation_path.open("w"), default=str)
+        messages = all_messages if all_messages else agent.messages
+        json.dump(messages, conversation_path.open("w"), default=str)
     except Exception:
         pass  # best-effort; metrics are the critical output
 

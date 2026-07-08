@@ -228,12 +228,12 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         # MCP server info — append to instruction (same pattern as mini_swe, hermes)
         if self.mcp_servers:
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available.\n"
-            for s in self.mcp_servers:
-                if s.transport == "stdio":
-                    args_str = " ".join(s.args)
-                    mcp_info += f"- {s.name}: stdio transport, command: {s.command} {args_str}\n"
+            for server in self.mcp_servers:
+                if server.transport == "stdio":
+                    args_str = " ".join(server.args)
+                    mcp_info += f"- {server.name}: stdio transport, command: {server.command} {args_str}\n"
                 else:
-                    mcp_info += f"- {s.name}: {s.transport} transport, url: {s.url}\n"
+                    mcp_info += f"- {server.name}: {server.transport} transport, url: {server.url}\n"
             instruction = instruction + mcp_info
 
         # Pass instruction via env var to avoid shell escaping issues

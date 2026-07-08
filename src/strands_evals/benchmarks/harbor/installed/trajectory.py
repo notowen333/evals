@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -31,9 +32,9 @@ def _extract_reasoning(content_blocks: list[dict[str, Any]]) -> str | None:
     """Extract reasoning/thinking content from Strands content blocks."""
     parts = []
     for block in content_blocks:
-        rc = block.get("reasoningContent")
-        if rc and isinstance(rc, dict):
-            text = rc.get("reasoningText", {}).get("text", "")
+        reasoning_content = block.get("reasoningContent")
+        if reasoning_content and isinstance(reasoning_content, dict):
+            text = reasoning_content.get("reasoningText", {}).get("text", "")
             if text:
                 parts.append(text)
     return "\n".join(parts) if parts else None
@@ -43,13 +44,13 @@ def _extract_tool_calls(content_blocks: list[dict[str, Any]]) -> list[ToolCall]:
     """Extract tool calls from Strands content blocks."""
     calls = []
     for block in content_blocks:
-        tu = block.get("toolUse")
-        if tu:
+        tool_use = block.get("toolUse")
+        if tool_use:
             calls.append(
                 ToolCall(
-                    tool_call_id=tu.get("toolUseId", str(uuid.uuid4())),
-                    function_name=tu.get("name", "unknown"),
-                    arguments=tu.get("input", {}),
+                    tool_call_id=tool_use.get("toolUseId", str(uuid.uuid4())),
+                    function_name=tool_use.get("name", "unknown"),
+                    arguments=tool_use.get("input", {}),
                 )
             )
     return calls
@@ -59,18 +60,20 @@ def _extract_tool_results(content_blocks: list[dict[str, Any]]) -> list[Observat
     """Extract tool results from Strands content blocks."""
     results = []
     for block in content_blocks:
-        tr = block.get("toolResult")
-        if tr:
-            content_parts = tr.get("content", [])
+        tool_result = block.get("toolResult")
+        if tool_result:
+            content_parts = tool_result.get("content", [])
             text_parts = []
             for part in content_parts:
                 if isinstance(part, dict) and "text" in part:
                     text_parts.append(part["text"])
+                elif isinstance(part, dict) and "json" in part:
+                    text_parts.append(json.dumps(part["json"]))
                 elif isinstance(part, str):
                     text_parts.append(part)
             results.append(
                 ObservationResult(
-                    source_call_id=tr.get("toolUseId"),
+                    source_call_id=tool_result.get("toolUseId"),
                     content="\n".join(text_parts) if text_parts else None,
                 )
             )
@@ -142,8 +145,8 @@ def convert_strands_to_atif(
             # Timestamp from cycle traces (one cycle per assistant message)
             timestamp = None
             if cycle_idx < len(cycle_timestamps):
-                ts = cycle_timestamps[cycle_idx]
-                start = ts.get("start_time")
+                cycle_timestamp = cycle_timestamps[cycle_idx]
+                start = cycle_timestamp.get("start_time")
                 if start:
                     timestamp = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
                 cycle_idx += 1
