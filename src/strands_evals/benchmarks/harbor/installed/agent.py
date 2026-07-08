@@ -72,6 +72,14 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             bool_true="true",
             bool_false="false",
         ),
+        EnvVar(
+            "bypass_tool_consent",
+            env="BYPASS_TOOL_CONSENT",
+            type="bool",
+            default=True,
+            bool_true="true",
+            bool_false="false",
+        ),
     ]
 
     ERROR_PATTERNS = [
