@@ -59,7 +59,7 @@ def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
         raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
     if not (agent_path / "agent.py").exists():
         raise FileNotFoundError(f"No agent.py found in {agent_path}")
-    return agent_path, "agent:agent"
+    return agent_path, "agent:provide_agent"
 
 
 def _resolve_agent_deps(agent_dir: Path) -> str | None:
@@ -147,7 +147,7 @@ def add_subparser(
     parser.add_argument(
         "agent_file",
         metavar="AGENT_DIR",
-        help="directory containing agent.py with a Strands Agent assigned to a variable called `agent`",
+        help="directory containing agent.py that defines `provide_agent()` returning a Strands Agent",
     )
     parser.add_argument(
         "--deps",

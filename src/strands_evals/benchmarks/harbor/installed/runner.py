@@ -24,12 +24,15 @@ from pathlib import Path
 
 
 def _import_agent(agent_spec: str):
-    """Import 'module.path:attribute' and return the Agent instance."""
+    """Import 'module:function' and call it to get a fresh Agent instance."""
     if ":" not in agent_spec:
-        raise ValueError(f"agent_spec must be 'module:attribute', got: {agent_spec!r}")
-    module_path, attr_name = agent_spec.rsplit(":", 1)
+        raise ValueError(f"agent_spec must be 'module:function', got: {agent_spec!r}")
+    module_path, func_name = agent_spec.rsplit(":", 1)
     mod = import_module(module_path)
-    return getattr(mod, attr_name)
+    factory = getattr(mod, func_name)
+    if not callable(factory):
+        raise TypeError(f"{agent_spec} is not callable — agent.py must define a function `provide_agent()`")
+    return factory()
 
 
 def _write_result(output_path: Path, data: dict) -> None:
