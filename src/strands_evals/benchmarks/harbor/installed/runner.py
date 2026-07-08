@@ -24,24 +24,31 @@ from pathlib import Path
 
 
 def _import_agent(agent_spec: str):
-    """Import 'module:function', call it to get a fresh Agent instance.
+    """Import 'module:symbol' and resolve to an Agent + invoke callable.
 
-    Also checks if the module defines an `invoke_agent(agent, instruction, **kwargs)` function.
-    Returns (agent_instance, invoke_agent_fn or None).
+    Supports:
+    - BenchmarkAgent subclass: instantiates it, uses .create_agent() and .invoke()
+    - Plain function (legacy): calls it to get the Agent, no custom invoke
+
+    Returns (agent_instance, invoke_fn_or_None, benchmark_agent_or_None).
     """
     if ":" not in agent_spec:
-        raise ValueError(f"agent_spec must be 'module:function', got: {agent_spec!r}")
-    module_path, func_name = agent_spec.rsplit(":", 1)
+        raise ValueError(f"agent_spec must be 'module:symbol', got: {agent_spec!r}")
+    module_path, symbol_name = agent_spec.rsplit(":", 1)
     mod = import_module(module_path)
-    factory = getattr(mod, func_name)
-    if not callable(factory):
-        raise TypeError(f"{agent_spec} is not callable — agent.py must define a function `create_agent()`")
+    symbol = getattr(mod, symbol_name)
 
-    invoke_agent_fn = getattr(mod, "invoke_agent", None)
-    if invoke_agent_fn is not None and not callable(invoke_agent_fn):
-        invoke_agent_fn = None
+    # Check if it's a class (BenchmarkAgent subclass)
+    if isinstance(symbol, type):
+        instance = symbol()
+        agent = instance.create_agent()
+        return agent, instance.invoke, instance
 
-    return factory(), invoke_agent_fn
+    # Legacy: plain create_agent() function
+    if not callable(symbol):
+        raise TypeError(f"{agent_spec} is not callable or a BenchmarkAgent subclass")
+    agent = symbol()
+    return agent, None, None
 
 
 def _write_result(output_path: Path, data: dict) -> None:
@@ -80,7 +87,7 @@ def main() -> int:
         sys.path.insert(0, cwd)
 
     try:
-        agent, invoke_agent_fn = _import_agent(args.agent)
+        agent, invoke_fn, benchmark_instance = _import_agent(args.agent)
     except Exception:
         traceback.print_exc()
         _write_result(output_path, {"error": traceback.format_exc(), "stop_reason": "import_error"})
@@ -143,8 +150,8 @@ def main() -> int:
             pass
 
     try:
-        if invoke_agent_fn is not None:
-            result = invoke_agent_fn(agent, args.instruction, **invoke_kwargs)
+        if invoke_fn is not None:
+            result = invoke_fn(agent, args.instruction, **invoke_kwargs)
         else:
             result = agent(args.instruction, **invoke_kwargs)
     except Exception:

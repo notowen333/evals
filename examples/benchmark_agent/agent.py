@@ -11,6 +11,8 @@ from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.bedrock import BedrockModel
 from strands_tools import editor, file_read, file_write, shell
 
+from strands_evals.benchmarks.harbor import BenchmarkAgent
+
 SYSTEM_PROMPT = """\
 You are an expert software engineer working in a sandboxed Linux container.
 You will be given a task. Complete it by modifying files and running commands.
@@ -51,13 +53,14 @@ You will be given a task. Complete it by modifying files and running commands.
 """
 
 
-def create_agent() -> Agent:
-    model_id = os.environ.get("STRANDS_MODEL", "us.anthropic.claude-sonnet-4-6")
+class MyAgent(BenchmarkAgent):
+    def create_agent(self) -> Agent:
+        model_id = os.environ.get("STRANDS_MODEL", "us.anthropic.claude-sonnet-4-6")
 
-    return Agent(
-        model=BedrockModel(model_id=model_id),
-        system_prompt=SYSTEM_PROMPT,
-        tools=[shell, file_read, file_write, editor],
-        conversation_manager=SlidingWindowConversationManager(window_size=40),
-        callback_handler=None,
-    )
+        return Agent(
+            model=BedrockModel(model_id=model_id),
+            system_prompt=SYSTEM_PROMPT,
+            tools=[shell, file_read, file_write, editor],
+            conversation_manager=SlidingWindowConversationManager(window_size=40),
+            callback_handler=None,
+        )

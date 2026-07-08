@@ -51,24 +51,34 @@ def _resolve_aws_creds() -> dict[str, str]:
 
 
 def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
-    """Resolve the agent directory and module:function import path.
+    """Resolve the agent directory and the BenchmarkAgent subclass import path.
 
-    The path must be a directory. We scan for a .py file that defines `create_agent()`.
+    Scans .py files for a class that subclasses BenchmarkAgent (or defines create_agent
+    for backward compat).
     """
     if not agent_path.is_dir():
         raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
 
-    # Find the .py file that defines create_agent
     for py_file in sorted(agent_path.glob("*.py")):
         content = py_file.read_text()
+        # Look for a BenchmarkAgent subclass
+        if "BenchmarkAgent" in content and "class " in content:
+            # Find the class name
+            for line in content.splitlines():
+                if line.strip().startswith("class ") and "BenchmarkAgent" in line:
+                    class_name = line.strip().split("(")[0].replace("class ", "").strip()
+                    return agent_path, f"{py_file.stem}:{class_name}"
+        # Backward compat: bare create_agent function
         if "def create_agent" in content:
             return agent_path, f"{py_file.stem}:create_agent"
 
     raise FileNotFoundError(
-        f"No Python file in {agent_path} defines `create_agent()`. "
+        f"No BenchmarkAgent subclass found in {agent_path}. "
         "Your agent directory must contain a .py file with:\n\n"
-        "    def create_agent() -> Agent:\n"
-        "        return Agent(...)\n"
+        "    from strands_evals.benchmarks.harbor import BenchmarkAgent\n\n"
+        "    class MyAgent(BenchmarkAgent):\n"
+        "        def create_agent(self):\n"
+        "            return Agent(...)\n"
     )
 
 
@@ -153,17 +163,46 @@ def _run(args: argparse.Namespace) -> int:
 
     result = subprocess.run(cmd)
 
-    # Post-run callback
-    if args.post_run:
-        job_dir = _find_latest_job_dir(output_dir)
-        if job_dir:
-            post_cmd = args.post_run.replace("{job_dir}", str(job_dir))
-            logger.debug("post-run: %s", post_cmd)
-            subprocess.run(post_cmd, shell=True)
-        else:
-            logger.warning("no job directory found in %s for post-run command", output_dir)
+    # Post-run: call on_complete if the agent defines it (BenchmarkAgent subclass)
+    job_dir = _find_latest_job_dir(output_dir)
+    if job_dir:
+        agent_dir, agent_module = _resolve_agent_dir_and_module(Path(args.agent_file).resolve())
+        _invoke_on_complete(agent_dir, agent_module, job_dir)
+
+    # Also run --post-run shell command if provided
+    if args.post_run and job_dir:
+        post_cmd = args.post_run.replace("{job_dir}", str(job_dir))
+        logger.debug("post-run: %s", post_cmd)
+        subprocess.run(post_cmd, shell=True)
 
     return result.returncode
+
+
+def _invoke_on_complete(agent_dir: Path, agent_module: str, job_dir: Path) -> None:
+    """Import the BenchmarkAgent and call on_complete if it exists and isn't the base no-op."""
+    import importlib
+    import sys as _sys
+
+    if str(agent_dir) not in _sys.path:
+        _sys.path.insert(0, str(agent_dir))
+
+    try:
+        module_path, symbol_name = agent_module.rsplit(":", 1)
+        mod = importlib.import_module(module_path)
+        symbol = getattr(mod, symbol_name)
+        if isinstance(symbol, type):
+            instance = symbol()
+            # Only call if it's overridden (not the base class no-op)
+            if type(instance).on_complete is not type(instance).__mro__[1].on_complete:
+                results = {}
+                results_path = job_dir / "result.json"
+                if results_path.exists():
+                    import json
+
+                    results = json.loads(results_path.read_text())
+                instance.on_complete(job_dir, results)
+    except Exception:
+        logger.debug("on_complete failed", exc_info=True)
 
 
 def add_subparser(

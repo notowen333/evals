@@ -1,15 +1,19 @@
 """Harbor adapter — run a Strands agent inside Harbor (Terminal-Bench 2.0).
 
-Run any Strands agent file unchanged inside a Harbor container::
+Subclass ``BenchmarkAgent`` and implement ``create_agent()``::
 
-    strands-evals benchmark ./my_agent.py -p <task>
+    from strands_evals.benchmarks.harbor import BenchmarkAgent
 
-Or directly via harbor::
+    class MyAgent(BenchmarkAgent):
+        def create_agent(self):
+            return Agent(model=..., tools=[...], callback_handler=None)
 
-    harbor run --agent strands_evals.benchmarks.harbor.installed:StrandsInstalledAgent \\
-        --ak agent_module=my_agent:agent --ak agent_path=./my_agent.py -p <task>
+Then run::
+
+    strands-evals benchmark ./my_agent/ --dataset ...
 """
 
+from .benchmark_agent import BenchmarkAgent
 from .installed import StrandsInstalledAgent
 
-__all__ = ["StrandsInstalledAgent"]
+__all__ = ["BenchmarkAgent", "StrandsInstalledAgent"]
