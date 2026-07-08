@@ -160,7 +160,7 @@ def _run(args: argparse.Namespace) -> int:
 
     result = subprocess.run(cmd)
 
-    # Post-run: call on_complete if the agent defines it (BenchmarkAgent subclass)
+    # Post-run: call on_benchmark_complete if the agent defines it
     job_dir = _find_latest_job_dir(output_dir)
     if job_dir:
         agent_dir, agent_module = _resolve_agent_dir_and_module(Path(args.agent_file).resolve())

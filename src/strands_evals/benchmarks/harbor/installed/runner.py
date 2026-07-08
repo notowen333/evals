@@ -27,7 +27,7 @@ def _import_agent(agent_spec: str):
     """Import 'module:symbol' and resolve to an Agent + invoke callable.
 
     Supports:
-    - A class with create_agent() (duck-typed BenchmarkAgent)
+    - A class with a create_agent() method
     - Plain function (legacy): calls it to get the Agent
 
     Returns (agent_instance, invoke_fn_or_None, benchmark_instance_or_None).
@@ -38,7 +38,7 @@ def _import_agent(agent_spec: str):
     mod = import_module(module_path)
     symbol = getattr(mod, symbol_name)
 
-    # Class with create_agent() method (duck-typed BenchmarkAgent)
+    # Class with create_agent() method
     if isinstance(symbol, type):
         instance = symbol()
         agent = instance.create_agent()
