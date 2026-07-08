@@ -7,6 +7,7 @@ import sys
 
 from . import _common
 from .commands import benchmark as benchmark_cmd
+from .commands import benchmark_setup as benchmark_setup_cmd
 from .commands import diagnose as diagnose_cmd
 from .commands import fetch as fetch_cmd
 from .commands import generate as generate_cmd
@@ -27,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.required = True
 
     benchmark_cmd.add_subparser(subparsers, parent)
+    benchmark_setup_cmd.add_subparser(subparsers, parent)
     validate_cmd.add_subparser(subparsers, parent)
     report_cmd.add_subparser(subparsers, parent)
     diagnose_cmd.add_subparser(subparsers, parent)
