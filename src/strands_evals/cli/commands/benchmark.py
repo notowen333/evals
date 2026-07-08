@@ -51,15 +51,25 @@ def _resolve_aws_creds() -> dict[str, str]:
 
 
 def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
-    """Resolve the agent directory and module:attribute import path.
+    """Resolve the agent directory and module:function import path.
 
-    The path must be a directory containing agent.py (which exports an `agent` attribute).
+    The path must be a directory. We scan for a .py file that defines `provide_agent()`.
     """
     if not agent_path.is_dir():
         raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
-    if not (agent_path / "agent.py").exists():
-        raise FileNotFoundError(f"No agent.py found in {agent_path}")
-    return agent_path, "agent:provide_agent"
+
+    # Find the .py file that defines provide_agent
+    for py_file in sorted(agent_path.glob("*.py")):
+        content = py_file.read_text()
+        if "def provide_agent" in content:
+            return agent_path, f"{py_file.stem}:provide_agent"
+
+    raise FileNotFoundError(
+        f"No Python file in {agent_path} defines `provide_agent()`. "
+        "Your agent directory must contain a .py file with:\n\n"
+        "    def provide_agent() -> Agent:\n"
+        "        return Agent(...)\n"
+    )
 
 
 def _resolve_agent_deps(agent_dir: Path) -> str | None:
@@ -147,7 +157,7 @@ def add_subparser(
     parser.add_argument(
         "agent_file",
         metavar="AGENT_DIR",
-        help="directory containing agent.py that defines `provide_agent()` returning a Strands Agent",
+        help="directory containing a .py file that defines `provide_agent()` returning a Strands Agent",
     )
     parser.add_argument(
         "--deps",
