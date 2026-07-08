@@ -51,32 +51,29 @@ def _resolve_aws_creds() -> dict[str, str]:
 
 
 def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
-    """Resolve the agent directory and the BenchmarkAgent subclass import path.
+    """Resolve the agent directory and class import path.
 
-    Scans .py files for a class that subclasses BenchmarkAgent (or defines create_agent
-    for backward compat).
+    Finds a class with a create_agent method in any .py file.
     """
     if not agent_path.is_dir():
         raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
 
     for py_file in sorted(agent_path.glob("*.py")):
-        content = py_file.read_text()
-        # Look for a BenchmarkAgent subclass
-        if "BenchmarkAgent" in content and "class " in content:
-            # Find the class name
-            for line in content.splitlines():
-                if line.strip().startswith("class ") and "BenchmarkAgent" in line:
-                    class_name = line.strip().split("(")[0].replace("class ", "").strip()
-                    return agent_path, f"{py_file.stem}:{class_name}"
-        # Backward compat: bare create_agent function
-        if "def create_agent" in content:
-            return agent_path, f"{py_file.stem}:create_agent"
+        lines = py_file.read_text().splitlines()
+
+        # Find a class that has a create_agent method
+        current_class = None
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("class ") and ":" in stripped:
+                current_class = stripped.split("(")[0].split(":")[0].replace("class ", "").strip()
+            elif stripped.startswith("def create_agent") and current_class:
+                return agent_path, f"{py_file.stem}:{current_class}"
 
     raise FileNotFoundError(
-        f"No BenchmarkAgent subclass found in {agent_path}. "
+        f"No class with create_agent() found in {agent_path}. "
         "Your agent directory must contain a .py file with:\n\n"
-        "    from strands_evals.benchmarks.harbor import BenchmarkAgent\n\n"
-        "    class MyAgent(BenchmarkAgent):\n"
+        "    class MyAgent:\n"
         "        def create_agent(self):\n"
         "            return Agent(...)\n"
     )
