@@ -71,8 +71,16 @@ class MyAgent:
         )
 
     def on_benchmark_complete(self, job_dir, results):
-        """Upload results to S3 after the benchmark run."""
-        import subprocess
+        """Upload results to S3 after the benchmark run.
 
-        prefix = f"s3://{S3_BUCKET}/{job_dir.name}/"
-        subprocess.run(["aws", "s3", "cp", str(job_dir), prefix, "--recursive", "--quiet"])
+        This runs on the HOST (not in the container) after all trials complete and
+        artifacts are downloaded. Use it for uploads, notifications, or analysis.
+        """
+        import boto3
+        from pathlib import Path
+
+        s3 = boto3.client("s3")
+        for file_path in Path(job_dir).rglob("*"):
+            if file_path.is_file():
+                key = f"{job_dir.name}/{file_path.relative_to(job_dir)}"
+                s3.upload_file(str(file_path), S3_BUCKET, key)
