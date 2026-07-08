@@ -38,6 +38,16 @@ def _write_result(output_path: Path, data: dict) -> None:
         json.dump(data, f)
 
 
+def _dump_conversation(output_dir: Path, all_messages: list, agent) -> None:
+    """Write conversation.json from recorded messages (or fallback to agent.messages)."""
+    conversation_path = output_dir / "conversation.json"
+    try:
+        messages = all_messages if all_messages else getattr(agent, "messages", [])
+        json.dump(messages, conversation_path.open("w"), default=str)
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a Strands agent inside a Harbor container.")
     parser.add_argument("--agent", required=True, help="Import path to the Agent instance (module:attribute)")
@@ -107,6 +117,8 @@ def main() -> int:
                 "accumulated_usage": dict(usage) if usage else None,
             },
         )
+        # Dump partial conversation even on error
+        _dump_conversation(output_path.parent, all_messages, agent)
         return 1
 
     # Success — write full metrics
@@ -141,13 +153,7 @@ def main() -> int:
     )
 
     # Write the full conversation for ATIF trajectory conversion.
-    # Use all_messages (recorded via hook) to avoid truncation from conversation managers.
-    conversation_path = output_path.parent / "conversation.json"
-    try:
-        messages = all_messages if all_messages else agent.messages
-        json.dump(messages, conversation_path.open("w"), default=str)
-    except Exception:
-        pass  # best-effort; metrics are the critical output
+    _dump_conversation(output_path.parent, all_messages, agent)
 
     return 0
 

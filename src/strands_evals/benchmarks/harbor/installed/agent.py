@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, override
 
 from harbor.agents.installed.base import (
+    ApiRateLimitError,
     BaseInstalledAgent,
     CliFlag,
     EnvVar,
@@ -83,17 +84,8 @@ class StrandsInstalledAgent(BaseInstalledAgent):
     ]
 
     ERROR_PATTERNS = [
-        ErrorPattern(
-            r"ThrottlingException",
-            __import__("harbor.agents.installed.base", fromlist=["ApiRateLimitError"]).ApiRateLimitError,
-        ),
-        ErrorPattern(
-            r"rate.?limit", __import__("harbor.agents.installed.base", fromlist=["ApiRateLimitError"]).ApiRateLimitError
-        ),
-        ErrorPattern(
-            r"too many requests",
-            __import__("harbor.agents.installed.base", fromlist=["ApiRateLimitError"]).ApiRateLimitError,
-        ),
+        ErrorPattern(r"ThrottlingException", ApiRateLimitError),
+        ErrorPattern(r"ModelThrottledException", ApiRateLimitError),
         *BaseInstalledAgent.ERROR_PATTERNS,
     ]
 
@@ -130,19 +122,9 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         if check_result.return_code == 0:
             self.logger.debug("Strands venv already installed, skipping")
         else:
-            # Ensure curl is available (some base images don't include it)
             await self.exec_as_root(
                 environment,
-                command=(
-                    "command -v curl >/dev/null 2>&1 || ("
-                    "if command -v apt-get &>/dev/null; then"
-                    "  apt-get update -qq && apt-get install -y -qq curl git;"
-                    " elif command -v apk &>/dev/null; then"
-                    "  apk add --no-cache curl git bash;"
-                    " elif command -v yum &>/dev/null; then"
-                    "  yum install -y curl git;"
-                    " fi)"
-                ),
+                command="command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl)",
                 env={"DEBIAN_FRONTEND": "noninteractive"},
             )
 
@@ -241,17 +223,18 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         agent_module = shlex.quote(self._agent_module)
 
         cli_flags = self.build_cli_flags()
-        extra_flags = f" {cli_flags}" if cli_flags else ""
 
-        command = (
-            f"cd {_AGENT_INSTALL_DIR} && "
-            f"{_VENV_PYTHON} {_RUNNER_CONTAINER_PATH} "
-            f"--agent {agent_module} "
-            '--instruction "$HARBOR_INSTRUCTION" '
-            f"--output {_RESULT_PATH}"
-            f"{extra_flags} "
-            f"2>&1 | tee {_LOG_PATH}"
-        )
+        parts = [
+            f"cd {_AGENT_INSTALL_DIR} &&",
+            f"{_VENV_PYTHON} {_RUNNER_CONTAINER_PATH}",
+            f"--agent {agent_module}",
+            '--instruction "$HARBOR_INSTRUCTION"',
+            f"--output {_RESULT_PATH}",
+        ]
+        if cli_flags:
+            parts.append(cli_flags)
+        parts.append(f"2>&1 | tee {_LOG_PATH}")
+        command = " ".join(parts)
 
         await self.exec_as_agent(environment, command=command, env=env)
 
