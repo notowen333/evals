@@ -292,7 +292,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
                 messages,
                 agent_name=self.name(),
                 agent_version=result_data.get("strands_version") or self.version() or "unknown",
-                model_name=self.model_name,
+                model_name=result_data.get("model_id") or self.model_name,
                 result_data=result_data,
             )
             trajectory_path = self.logs_dir / "trajectory.json"
