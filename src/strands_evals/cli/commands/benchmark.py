@@ -50,15 +50,21 @@ def _resolve_aws_creds() -> dict[str, str]:
         return {}
 
 
-def _resolve_agent_module(agent_path: Path) -> str:
-    """Infer the module:attribute import path for the agent file."""
-    stem = agent_path.stem
-    return f"{stem}:agent"
+def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
+    """Resolve the agent directory and module:attribute import path.
+
+    The path must be a directory containing agent.py (which exports an `agent` attribute).
+    """
+    if not agent_path.is_dir():
+        raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
+    if not (agent_path / "agent.py").exists():
+        raise FileNotFoundError(f"No agent.py found in {agent_path}")
+    return agent_path, "agent:agent"
 
 
-def _resolve_agent_deps(agent_path: Path) -> str | None:
-    """Look for a requirements.txt next to the agent file."""
-    reqs = agent_path.parent / "requirements.txt"
+def _resolve_agent_deps(agent_dir: Path) -> str | None:
+    """Look for a requirements.txt in the agent directory."""
+    reqs = agent_dir / "requirements.txt"
     if reqs.exists():
         deps = [line.strip() for line in reqs.read_text().splitlines() if line.strip() and not line.startswith("#")]
         return " ".join(deps)
@@ -69,21 +75,23 @@ def _build_harbor_command(args: argparse.Namespace) -> list[str]:
     """Build the harbor run command from our args + passthrough."""
     agent_path = Path(args.agent_file).resolve()
     if not agent_path.exists():
-        raise FileNotFoundError(f"Agent file not found: {agent_path}")
+        raise FileNotFoundError(f"Agent path not found: {agent_path}")
+
+    agent_dir, agent_module = _resolve_agent_dir_and_module(agent_path)
 
     cmd = ["harbor", "run"]
 
     # Agent selection
     cmd.extend(["-a", _INSTALLED_AGENT])
 
-    # Agent kwargs
-    cmd.extend(["--ak", f"agent_path={agent_path}"])
-    cmd.extend(["--ak", f"agent_module={_resolve_agent_module(agent_path)}"])
+    # Always upload the directory (file's parent or the dir itself)
+    cmd.extend(["--ak", f"agent_path={agent_dir}"])
+    cmd.extend(["--ak", f"agent_module={agent_module}"])
 
-    # Deps: explicit --deps flag, or auto-detect from requirements.txt
+    # Deps: explicit --deps flag, or auto-detect from requirements.txt in agent dir
     deps = args.deps
     if deps is None:
-        deps = _resolve_agent_deps(agent_path)
+        deps = _resolve_agent_deps(agent_dir)
     if deps:
         cmd.extend(["--ak", f"agent_deps={deps}"])
 
@@ -138,8 +146,8 @@ def add_subparser(
     )
     parser.add_argument(
         "agent_file",
-        metavar="AGENT_FILE",
-        help="path to the Python file containing the Strands Agent instance (attribute named 'agent')",
+        metavar="AGENT_DIR",
+        help="directory containing agent.py with a Strands Agent assigned to a variable called `agent`",
     )
     parser.add_argument(
         "--deps",
@@ -147,7 +155,7 @@ def add_subparser(
         default=None,
         help=(
             "pip dependencies to install in the container (space-separated). "
-            "Auto-detected from requirements.txt next to the agent file if not specified."
+            "Auto-detected from requirements.txt in the agent directory if not specified."
         ),
     )
     parser.add_argument(

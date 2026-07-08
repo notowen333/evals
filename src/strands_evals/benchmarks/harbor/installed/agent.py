@@ -115,27 +115,28 @@ class StrandsInstalledAgent(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        # Check if already installed (avoid redundant work on retries)
+        # Fast-path: skip install entirely if venv already has strands (idempotent on retries)
         check_result = await environment.exec(
             command=f'[ -f {_VENV_PYTHON} ] && {_VENV_PYTHON} -c "import strands" 2>/dev/null',
         )
         if check_result.return_code == 0:
             self.logger.debug("Strands venv already installed, skipping")
         else:
+            # Ensure curl is present (needed to fetch the uv installer)
             await self.exec_as_root(
                 environment,
                 command="command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl)",
                 env={"DEBIAN_FRONTEND": "noninteractive"},
             )
 
-            # Create venv dir owned by default user (mirrors openhands_sdk pattern)
+            # Create venv dir writable by the non-root agent user
             agent_user = environment.default_user or "root"
             await self.exec_as_root(
                 environment,
                 command=f"mkdir -p {_VENV_PATH} && chown {agent_user}:{agent_user} {_VENV_PATH}",
             )
 
-            # Install uv, create venv with explicit Python, install deps
+            # Install uv, create an isolated venv, and install strands + user deps
             deps = [f"strands-agents{self._strands_version}"]
             if self._agent_deps:
                 for dep in self._agent_deps.replace(",", " ").split():
@@ -155,14 +156,14 @@ class StrandsInstalledAgent(BaseInstalledAgent):
                 ),
             )
 
-        # Upload runner script (also keep a copy in logs_dir for reproducibility)
+        # Upload the runner script that will invoke the user's agent
         runner_src = Path(__file__).parent / "runner.py"
         local_copy = self.logs_dir / "runner.py"
         local_copy.parent.mkdir(parents=True, exist_ok=True)
         local_copy.write_text(runner_src.read_text())
         await environment.upload_file(source_path=local_copy, target_path=_RUNNER_CONTAINER_PATH)
 
-        # Upload user's agent file/directory
+        # Upload the user's agent source into the container
         if self._agent_path:
             await self.exec_as_root(environment, command=f"mkdir -p {_AGENT_INSTALL_DIR}")
             if self._agent_path.is_dir():
@@ -179,13 +180,12 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        # Build env: resolved ENV_VARS + extra_env (creds come via --ae / extra_env,
-        # which Harbor's Trial also applies via scoped_exec_env — belt and suspenders).
+        # Merge env vars: declarative ENV_VARS first, then extra_env (CLI --ae overrides)
         env: dict[str, str] = {}
         env.update(self.resolve_env_vars())
         env.update(self._extra_env)
 
-        # Resolve provider API keys from model_name (same pattern as mini_swe, eve)
+        # Inject model name and resolve matching provider API keys (e.g. AWS creds for Bedrock)
         if self.model_name:
             env["STRANDS_MODEL"] = self.model_name
             try:
@@ -196,7 +196,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             except ValueError:
                 pass
 
-        # Forward OTEL config so the agent's spans reach the user's collector
+        # Forward OpenTelemetry config so traces from the container reach the host collector
         for var in (
             "OTEL_EXPORTER_OTLP_ENDPOINT",
             "OTEL_EXPORTER_OTLP_HEADERS",
@@ -207,7 +207,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             if value:
                 env[var] = value
 
-        # MCP server info — append to instruction (same pattern as mini_swe, hermes)
+        # Append MCP server descriptions to the instruction so the agent knows what's available
         if self.mcp_servers:
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available.\n"
             for server in self.mcp_servers:
@@ -218,10 +218,11 @@ class StrandsInstalledAgent(BaseInstalledAgent):
                     mcp_info += f"- {server.name}: {server.transport} transport, url: {server.url}\n"
             instruction = instruction + mcp_info
 
-        # Pass instruction via env var to avoid shell escaping issues
+        # Pass instruction as an env var — avoids shell quoting issues with arbitrary text
         env["HARBOR_INSTRUCTION"] = instruction
         agent_module = shlex.quote(self._agent_module)
 
+        # Build the runner invocation: cd into agent dir, run via venv python, tee output
         cli_flags = self.build_cli_flags()
 
         parts = [
