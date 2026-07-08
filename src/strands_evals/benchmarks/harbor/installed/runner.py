@@ -93,11 +93,10 @@ def main() -> int:
             @hook  # type: ignore[call-overload]
             def on_message(self, event: MessageAddedEvent) -> None:
                 all_messages.append(event.message)
-                # Append incrementally — survives hard kill
                 with conversation_path.open("a") as f:
                     f.write(json.dumps(event.message, default=str) + "\n")
 
-        agent.load_plugin(_MessageRecorder())
+        agent._plugin_registry.add_and_init(_MessageRecorder())
     except Exception:
         pass  # fall back to agent.messages if plugin fails
 
