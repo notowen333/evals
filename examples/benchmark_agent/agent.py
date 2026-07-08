@@ -7,7 +7,6 @@ Run with:
 import os
 
 from strands import Agent
-from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models.bedrock import BedrockModel
 from strands.sandbox.not_a_sandbox_local_environment import NotASandboxLocalEnvironment
 from strands.vended_tools.bash import make_bash
@@ -63,10 +62,10 @@ class MyAgent:
         sandbox = NotASandboxLocalEnvironment()
 
         return Agent(
-            model=BedrockModel(model_id=model_id),
+            model=BedrockModel(model_id=model_id, cache_config={"mode": "default"}),
             system_prompt=SYSTEM_PROMPT,
             tools=[make_bash(sandbox=sandbox), make_file_editor(sandbox=sandbox)],
-            conversation_manager=SlidingWindowConversationManager(window_size=40),
+            context_manager="auto",
             callback_handler=None,
         )
 
