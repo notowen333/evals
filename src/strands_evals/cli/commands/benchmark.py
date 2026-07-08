@@ -179,7 +179,7 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _invoke_on_complete(agent_dir: Path, agent_module: str, job_dir: Path) -> None:
-    """Import the BenchmarkAgent and call on_complete if it exists and isn't the base no-op."""
+    """Import the agent class and call on_benchmark_complete if it defines one."""
     import importlib
     import sys as _sys
 
@@ -192,17 +192,17 @@ def _invoke_on_complete(agent_dir: Path, agent_module: str, job_dir: Path) -> No
         symbol = getattr(mod, symbol_name)
         if isinstance(symbol, type):
             instance = symbol()
-            # Only call if it's overridden (not the base class no-op)
-            if type(instance).on_complete is not type(instance).__mro__[1].on_complete:
+            hook = getattr(instance, "on_benchmark_complete", None)
+            if hook is not None:
+                import json
+
                 results = {}
                 results_path = job_dir / "result.json"
                 if results_path.exists():
-                    import json
-
                     results = json.loads(results_path.read_text())
-                instance.on_complete(job_dir, results)
+                hook(job_dir, results)
     except Exception:
-        logger.debug("on_complete failed", exc_info=True)
+        logger.debug("on_benchmark_complete failed", exc_info=True)
 
 
 def add_subparser(

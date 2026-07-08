@@ -27,10 +27,10 @@ def _import_agent(agent_spec: str):
     """Import 'module:symbol' and resolve to an Agent + invoke callable.
 
     Supports:
-    - BenchmarkAgent subclass: instantiates it, uses .create_agent() and .invoke()
-    - Plain function (legacy): calls it to get the Agent, no custom invoke
+    - A class with create_agent() (duck-typed BenchmarkAgent)
+    - Plain function (legacy): calls it to get the Agent
 
-    Returns (agent_instance, invoke_fn_or_None, benchmark_agent_or_None).
+    Returns (agent_instance, invoke_fn_or_None, benchmark_instance_or_None).
     """
     if ":" not in agent_spec:
         raise ValueError(f"agent_spec must be 'module:symbol', got: {agent_spec!r}")
@@ -38,15 +38,16 @@ def _import_agent(agent_spec: str):
     mod = import_module(module_path)
     symbol = getattr(mod, symbol_name)
 
-    # Check if it's a class (BenchmarkAgent subclass)
+    # Class with create_agent() method (duck-typed BenchmarkAgent)
     if isinstance(symbol, type):
         instance = symbol()
         agent = instance.create_agent()
-        return agent, instance.invoke, instance
+        invoke_fn = getattr(instance, "invoke_agent", None)
+        return agent, invoke_fn, instance
 
     # Legacy: plain create_agent() function
     if not callable(symbol):
-        raise TypeError(f"{agent_spec} is not callable or a BenchmarkAgent subclass")
+        raise TypeError(f"{agent_spec} is not callable and has no create_agent() method")
     agent = symbol()
     return agent, None, None
 

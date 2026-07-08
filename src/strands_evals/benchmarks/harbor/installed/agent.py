@@ -164,14 +164,6 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         local_copy.write_text(runner_src.read_text())
         await environment.upload_file(source_path=local_copy, target_path=_RUNNER_CONTAINER_PATH)
 
-        # Upload benchmark_agent.py into the agent dir so the import resolves in-container.
-        # The runner adds the agent dir to sys.path, so `from benchmark_agent import BenchmarkAgent`
-        # works — but we also create a shim so `from strands_evals.benchmarks.harbor import BenchmarkAgent`
-        # resolves too.
-        base_class_src = Path(__file__).parent.parent / "benchmark_agent.py"
-        await environment.upload_file(
-            source_path=base_class_src, target_path=f"{_AGENT_INSTALL_DIR}/benchmark_agent.py"
-        )
 
         # Upload the user's agent source into the container + copy to logs for reproducibility
         if self._agent_path:

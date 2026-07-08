@@ -13,10 +13,6 @@ from strands.sandbox.not_a_sandbox_local_environment import NotASandboxLocalEnvi
 from strands.vended_tools.bash import make_bash
 from strands.vended_tools.file_editor import make_file_editor
 
-try:
-    from strands_evals.benchmarks.harbor import BenchmarkAgent
-except ImportError:
-    from benchmark_agent import BenchmarkAgent
 
 SYSTEM_PROMPT = """\
 You are an expert software engineer working in a sandboxed Linux container.
@@ -58,7 +54,7 @@ You will be given a task. Complete it by modifying files and running commands.
 """
 
 
-class MyAgent(BenchmarkAgent):
+class MyAgent:
     def create_agent(self) -> Agent:
         model_id = os.environ.get("STRANDS_MODEL", "us.anthropic.claude-sonnet-4-6")
         sandbox = NotASandboxLocalEnvironment()
