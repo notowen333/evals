@@ -8,6 +8,7 @@ import os
 
 from strands import Agent
 from strands.models.bedrock import BedrockModel
+from strands.models.model import CacheConfig
 from strands.sandbox.not_a_sandbox_local_environment import NotASandboxLocalEnvironment
 from strands.vended_tools.bash import make_bash
 from strands.vended_tools.file_editor import make_file_editor
@@ -62,7 +63,7 @@ class MyAgent:
         sandbox = NotASandboxLocalEnvironment()
 
         return Agent(
-            model=BedrockModel(model_id=model_id, cache_config={"strategy": "auto"}),
+            model=BedrockModel(model_id=model_id, cache_config=CacheConfig()),
             system_prompt=SYSTEM_PROMPT,
             tools=[make_bash(sandbox=sandbox), make_file_editor(sandbox=sandbox)],
             context_manager="auto",
