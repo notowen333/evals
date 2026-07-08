@@ -282,7 +282,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         context.n_cache_tokens = data.get("cache_tokens")
         context.cost_usd = None
         context.metadata = {
-            "model": self.model_name,
+            "model": data.get("model_id") or self.model_name,
             "stop_reason": data.get("stop_reason"),
             "cycle_count": data.get("cycle_count"),
             "accumulated_usage": data.get("accumulated_usage"),
