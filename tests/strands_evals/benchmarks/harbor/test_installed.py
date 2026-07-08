@@ -68,8 +68,7 @@ async def test_run_execs_runner_with_instruction(tmp_path):
     await agent.run("fix the bug", env, AgentContext())
 
     commands = [c["command"] for c in env.exec_calls]
-    run_cmd = commands[-1]  # last exec is the runner
-    assert "runner.py" in run_cmd
+    run_cmd = next(c for c in commands if "runner.py" in c)
     assert "--agent" in run_cmd
     assert "my_agent:agent" in run_cmd
 

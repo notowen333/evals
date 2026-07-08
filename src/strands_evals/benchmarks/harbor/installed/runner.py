@@ -42,7 +42,11 @@ def _write_result(output_path: Path, data: dict) -> None:
 
 
 def _dump_conversation(output_dir: Path, all_messages: list, agent) -> None:
-    """Write conversation.json from recorded messages (or fallback to agent.messages)."""
+    """Write conversation.json (full JSON array) from recorded messages.
+
+    The JSONL file is written incrementally during the run (survives kills).
+    This writes the final clean JSON array that the ATIF converter reads.
+    """
     conversation_path = output_dir / "conversation.json"
     try:
         messages = all_messages if all_messages else getattr(agent, "messages", [])
@@ -73,9 +77,12 @@ def main() -> int:
         _write_result(output_path, {"error": traceback.format_exc(), "stop_reason": "import_error"})
         return 1
 
-    # Record all messages as they happen (conversation managers truncate agent.messages,
-    # so we can't rely on the final list being complete for long runs).
+    # Stream messages to a JSONL file as they happen. This survives hard kills
+    # (same principle as `tee` for strands.log) — even if the runner is SIGKILLed,
+    # messages up to the last completed write are preserved.
     all_messages: list = []
+    conversation_path = output_path.parent / "conversation.jsonl"
+    conversation_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         from strands.hooks import MessageAddedEvent
         from strands.plugins import Plugin, hook
@@ -86,14 +93,16 @@ def main() -> int:
             @hook  # type: ignore[call-overload]
             def on_message(self, event: MessageAddedEvent) -> None:
                 all_messages.append(event.message)
+                # Append incrementally — survives hard kill
+                with conversation_path.open("a") as f:
+                    f.write(json.dumps(event.message, default=str) + "\n")
 
         agent.load_plugin(_MessageRecorder())
     except Exception:
         pass  # fall back to agent.messages if plugin fails
 
-    # Register a signal handler so that on timeout (SIGTERM from Harbor),
-    # we dump whatever we have before dying. Without this, timeouts lose
-    # all conversation data and metrics.
+    # SIGTERM handler: dump metrics on timeout. Conversation is already on disk
+    # (written incrementally above), but metrics need a final flush.
     import signal
 
     def _on_sigterm(signum, frame):
@@ -111,7 +120,6 @@ def main() -> int:
                 "accumulated_usage": dict(usage) if usage else None,
             },
         )
-        _dump_conversation(output_path.parent, all_messages, agent)
         sys.exit(1)
 
     signal.signal(signal.SIGTERM, _on_sigterm)

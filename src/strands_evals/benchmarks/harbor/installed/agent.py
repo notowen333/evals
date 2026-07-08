@@ -244,7 +244,21 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         parts.append(f"2>&1 | tee {_LOG_PATH}")
         command = " ".join(parts)
 
-        await self.exec_as_agent(environment, command=command, env=env)
+        try:
+            await self.exec_as_agent(environment, command=command, env=env)
+        finally:
+            # Container is still alive here (even after timeout/cancellation).
+            # If result.json doesn't exist (runner was killed before writing it),
+            # create a minimal one so populate_context_post_run has something to read.
+            # Same pattern as hermes (session export) and codex (session copy).
+            try:
+                fallback = '{"stop_reason":"timeout","error":"killed before flush"}'
+                await environment.exec(
+                    f"[ -f {_RESULT_PATH} ] || echo '{fallback}' > {_RESULT_PATH}",
+                    timeout_sec=5,
+                )
+            except Exception:
+                pass
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
@@ -284,14 +298,28 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         from .trajectory import convert_strands_to_atif
 
         conversation_path = self.logs_dir / "conversation.json"
-        if not conversation_path.exists():
-            logger.debug("path=<%s> | no conversation.json to convert", conversation_path)
-            return
+        conversation_jsonl_path = self.logs_dir / "conversation.jsonl"
 
-        try:
-            messages = json.loads(conversation_path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.debug("path=<%s> | failed to read conversation: %s", conversation_path, exc)
+        messages = None
+        if conversation_path.exists():
+            try:
+                messages = json.loads(conversation_path.read_text())
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.debug("path=<%s> | failed to read conversation.json: %s", conversation_path, exc)
+
+        # Fall back to JSONL (incremental, survives timeout kills)
+        if messages is None and conversation_jsonl_path.exists():
+            try:
+                messages = [
+                    json.loads(line)
+                    for line in conversation_jsonl_path.read_text().splitlines()
+                    if line.strip()
+                ]
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.debug("path=<%s> | failed to read conversation.jsonl: %s", conversation_jsonl_path, exc)
+
+        if not messages:
+            logger.debug("path=<%s> | no conversation data to convert", self.logs_dir)
             return
 
         try:
