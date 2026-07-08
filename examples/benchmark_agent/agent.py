@@ -54,6 +54,9 @@ You will be given a task. Complete it by modifying files and running commands.
 """
 
 
+S3_BUCKET = "my-benchmark-results"  # TODO: replace with your bucket
+
+
 class MyAgent:
     def create_agent(self) -> Agent:
         model_id = os.environ.get("STRANDS_MODEL", "us.anthropic.claude-sonnet-4-6")
@@ -66,3 +69,10 @@ class MyAgent:
             conversation_manager=SlidingWindowConversationManager(window_size=40),
             callback_handler=None,
         )
+
+    def on_benchmark_complete(self, job_dir, results):
+        """Upload results to S3 after the benchmark run."""
+        import subprocess
+
+        prefix = f"s3://{S3_BUCKET}/{job_dir.name}/"
+        subprocess.run(["aws", "s3", "cp", str(job_dir), prefix, "--recursive", "--quiet"])
