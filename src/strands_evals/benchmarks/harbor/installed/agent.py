@@ -163,14 +163,21 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         local_copy.write_text(runner_src.read_text())
         await environment.upload_file(source_path=local_copy, target_path=_RUNNER_CONTAINER_PATH)
 
-        # Upload the user's agent source into the container
+        # Upload the user's agent source into the container + copy to logs for reproducibility
         if self._agent_path:
             await self.exec_as_root(environment, command=f"mkdir -p {_AGENT_INSTALL_DIR}")
+            agent_logs_source = str(EnvironmentPaths.agent_dir / "source")
+            await self.exec_as_root(environment, command=f"mkdir -p {agent_logs_source}")
             if self._agent_path.is_dir():
                 await environment.upload_dir(source_dir=self._agent_path, target_dir=_AGENT_INSTALL_DIR)
+                await environment.upload_dir(source_dir=self._agent_path, target_dir=agent_logs_source)
             else:
                 target = f"{_AGENT_INSTALL_DIR}/{self._agent_path.name}"
                 await environment.upload_file(source_path=self._agent_path, target_path=target)
+                await environment.upload_file(
+                    source_path=self._agent_path,
+                    target_path=f"{agent_logs_source}/{self._agent_path.name}",
+                )
 
     @with_prompt_template
     @override
