@@ -27,7 +27,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_INSTALLED_AGENT = "strands_evals.benchmarks.harbor.installed:StrandsInstalledPyAgent"
 
 
 def _resolve_aws_creds() -> dict[str, str]:
@@ -55,18 +54,37 @@ def _resolve_aws_creds() -> dict[str, str]:
         return {}
 
 
-def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
-    """Resolve the agent directory and class import path.
+_INSTALLED_AGENT_PY = "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"
+_INSTALLED_AGENT_TS = "strands_evals.benchmarks.harbor.installed.ts:StrandsInstalledTSAgent"
 
-    Finds a class with a create_agent method in any .py file.
+
+def _detect_agent_type(agent_path: Path) -> str:
+    """Detect whether the agent directory is Python or TypeScript.
+
+    Returns the harbor --agent import path for the appropriate installed adapter.
+    """
+    if (agent_path / "package.json").exists():
+        return _INSTALLED_AGENT_TS
+    return _INSTALLED_AGENT_PY
+
+
+def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
+    """Resolve the agent directory and class/entry import path.
+
+    For Python: finds a class with a create_agent method.
+    For TypeScript: uses the agent_entry (defaults to agent.js).
     """
     if not agent_path.is_dir():
         raise FileNotFoundError(f"Expected a directory, got a file: {agent_path}")
 
+    # TypeScript: has package.json, entry point is handled by the TS adapter
+    if (agent_path / "package.json").exists():
+        return agent_path, "agent.js"
+
+    # Python: scan for a class with create_agent()
     for py_file in sorted(agent_path.glob("*.py")):
         lines = py_file.read_text().splitlines()
 
-        # Find a class that has a create_agent method
         current_class = None
         for line in lines:
             stripped = line.strip()
@@ -76,11 +94,9 @@ def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
                 return agent_path, f"{py_file.stem}:{current_class}"
 
     raise FileNotFoundError(
-        f"No class with create_agent() found in {agent_path}. "
-        "Your agent directory must contain a .py file with:\n\n"
-        "    class MyAgent:\n"
-        "        def create_agent(self):\n"
-        "            return Agent(...)\n"
+        f"No agent found in {agent_path}. Expected either:\n"
+        "  - A package.json (TypeScript agent with createAgent())\n"
+        "  - A .py file with a class defining create_agent()\n"
     )
 
 
@@ -100,15 +116,19 @@ def _build_base_harbor_command(args: argparse.Namespace) -> list[str]:
         raise FileNotFoundError(f"Agent path not found: {agent_path}")
 
     agent_dir, agent_module = _resolve_agent_dir_and_module(agent_path)
+    installed_agent = _detect_agent_type(agent_path)
 
     cmd = ["harbor", "run"]
 
-    # Agent selection
-    cmd.extend(["-a", _INSTALLED_AGENT])
+    # Agent selection (Python or TypeScript adapter based on directory contents)
+    cmd.extend(["-a", installed_agent])
 
-    # Always upload the directory (file's parent or the dir itself)
+    # Always upload the directory
     cmd.extend(["--ak", f"agent_path={agent_dir}"])
-    cmd.extend(["--ak", f"agent_module={agent_module}"])
+    if installed_agent == _INSTALLED_AGENT_TS:
+        cmd.extend(["--ak", f"agent_entry={agent_module}"])
+    else:
+        cmd.extend(["--ak", f"agent_module={agent_module}"])
 
     # Deps: explicit --deps flag, or auto-detect from requirements.txt in agent dir
     deps = args.deps
