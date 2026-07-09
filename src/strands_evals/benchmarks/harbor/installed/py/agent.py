@@ -18,7 +18,7 @@ from harbor.agents.installed.base import EnvVar
 from harbor.environments.base import BaseEnvironment
 from harbor.models.trial.paths import EnvironmentPaths
 
-from ..base_strands import BaseStrandsInstalledAgent, _AGENT_INSTALL_DIR, _RESULT_PATH, _LOG_PATH
+from ..base_strands_agent import BaseStrandsInstalledAgent, _AGENT_INSTALL_DIR, _RESULT_PATH, _LOG_PATH
 
 _RUNNER_CONTAINER_PATH = "/installed-agent/runner.py"
 _VENV_PATH = "/installed-agent/venv"

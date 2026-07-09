@@ -15,7 +15,7 @@ from typing import Any, override
 
 from harbor.environments.base import BaseEnvironment
 
-from ..base_strands import BaseStrandsInstalledAgent, _AGENT_INSTALL_DIR, _RESULT_PATH, _LOG_PATH
+from ..base_strands_agent import BaseStrandsInstalledAgent, _AGENT_INSTALL_DIR, _RESULT_PATH, _LOG_PATH
 
 _RUNNER_CONTAINER_PATH = "/installed-agent/runner.mjs"
 _NODE_VERSION = "22"
