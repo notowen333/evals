@@ -114,6 +114,18 @@ try {
   // best-effort
 }
 
+// Per-tool usage stats
+const toolStats = {}
+const rawToolMetrics = metrics?.toolMetrics ?? {}
+for (const [name, tm] of Object.entries(rawToolMetrics)) {
+  toolStats[name] = {
+    call_count: tm.callCount,
+    success_count: tm.successCount,
+    error_count: tm.errorCount,
+    total_time: Math.round(tm.totalTime) / 1000, // ms -> seconds
+  }
+}
+
 await writeResult({
   input_tokens: usage.inputTokens ?? null,
   output_tokens: usage.outputTokens ?? null,
@@ -122,6 +134,7 @@ await writeResult({
   cycle_count: metrics?.cycleCount ?? null,
   accumulated_usage: usage,
   strands_version: strandsVersion,
+  tool_stats: toolStats,
 })
 
 // Write conversation for ATIF trajectory conversion

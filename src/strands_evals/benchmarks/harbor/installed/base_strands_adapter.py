@@ -7,9 +7,7 @@ the command assembly in run().
 
 import json
 import logging
-import shlex
-from pathlib import Path
-from typing import Any, override
+from typing import override
 
 from harbor.agents.installed.base import (
     ApiRateLimitError,

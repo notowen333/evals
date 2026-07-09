@@ -198,6 +198,16 @@ def main() -> int:
     for trace in getattr(metrics, "traces", []):
         cycle_timestamps.append({"start_time": trace.start_time, "end_time": trace.end_time})
 
+    # Per-tool usage stats
+    tool_stats = {}
+    for name, tm in getattr(metrics, "tool_metrics", {}).items():
+        tool_stats[name] = {
+            "call_count": tm.call_count,
+            "success_count": tm.success_count,
+            "error_count": tm.error_count,
+            "total_time": round(tm.total_time, 3),
+        }
+
     _write_result(
         output_path,
         {
@@ -210,6 +220,7 @@ def main() -> int:
             "strands_version": strands_version,
             "model_id": model_id,
             "cycle_timestamps": cycle_timestamps,
+            "tool_stats": tool_stats,
         },
     )
 
