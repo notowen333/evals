@@ -1,0 +1,8 @@
+{
+  "name": "benchmark-agent-ts",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@strands-agents/sdk": "latest"
+  }
+}
