@@ -112,6 +112,10 @@ def _build_harbor_command(args: argparse.Namespace) -> list[str]:
     if deps:
         cmd.extend(["--ak", f"agent_deps={deps}"])
 
+    # Unpublished strands ref (install from git instead of PyPI)
+    if args.unpublished_strands_ref:
+        cmd.extend(["--ak", f"unpublished_strands_ref={args.unpublished_strands_ref}"])
+
     # AWS creds from current session
     aws_env = _resolve_aws_creds()
     for key, value in aws_env.items():
@@ -243,6 +247,15 @@ def add_subparser(
         metavar="CMD",
         default=None,
         help="command to run after the job completes. {job_dir} is replaced with the results path.",
+    )
+    parser.add_argument(
+        "--unpublished-strands-ref",
+        metavar="URL",
+        default=None,
+        help=(
+            "install strands-agents from a git URL instead of PyPI. "
+            "e.g. https://github.com/your-fork/sdk-python@your-branch"
+        ),
     )
     parser.add_argument(
         "--deps",

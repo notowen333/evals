@@ -96,6 +96,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         agent_path: str | None = None,
         agent_deps: str = "strands-agents-tools",
         strands_version: str = ">=1.45.0",
+        unpublished_strands_ref: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, **kwargs)
@@ -103,6 +104,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         self._agent_path = Path(agent_path) if agent_path else None
         self._agent_deps = agent_deps or ""
         self._strands_version = strands_version
+        self._unpublished_strands_ref = unpublished_strands_ref
 
     @staticmethod
     @override
@@ -137,7 +139,18 @@ class StrandsInstalledAgent(BaseInstalledAgent):
             )
 
             # Install uv, create an isolated venv, and install strands + user deps
-            deps = [f"strands-agents{self._strands_version}"]
+            if self._unpublished_strands_ref:
+                # Install from a git ref (unpublished branch/commit) instead of PyPI
+                url = self._unpublished_strands_ref
+                if not url.startswith("git+"):
+                    url = f"git+{url}"
+                if "#" not in url:
+                    url = f"{url}#subdirectory=strands-py"
+                strands_dep = f"strands-agents @ {url}"
+            else:
+                strands_dep = f"strands-agents{self._strands_version}"
+
+            deps = [strands_dep]
             if self._agent_deps:
                 for dep in self._agent_deps.replace(",", " ").split():
                     if dep.strip():
@@ -174,7 +187,8 @@ class StrandsInstalledAgent(BaseInstalledAgent):
                 await environment.upload_dir(source_dir=self._agent_path, target_dir=_AGENT_INSTALL_DIR)
                 await environment.upload_dir(source_dir=self._agent_path, target_dir=agent_logs_source)
                 await environment.exec(
-                    f"find {_AGENT_INSTALL_DIR} {agent_logs_source} -name '__pycache__' -type d -exec rm -rf {{}} + 2>/dev/null; true",
+                    f"find {_AGENT_INSTALL_DIR} {agent_logs_source}"
+                    " -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null; true",
                     timeout_sec=5,
                 )
             else:
