@@ -136,6 +136,89 @@ strands-evals generate --context "$(cat tools.txt)" --num-cases 10 \
 
 Run any subcommand with `--help` for the full flag set (custom evaluators via `MODULE:CLASS`, trace attributes, `--fail-on` exit-code rules, output formats, etc.).
 
+## Running Benchmarks Remotely via AWS SSM
+
+You can kick off Harbor benchmark runs on a remote EC2 instance using AWS Systems Manager (SSM) `send-command`. This avoids needing SSH keys or open ports.
+
+### One-Time Instance Setup
+
+SSM runs commands as `root` with a minimal environment (no `$HOME`, no user shell profile). The first time you set up an instance:
+
+1. **Install the SSM Agent** — most Amazon Linux / Ubuntu AMIs have it pre-installed. Verify the instance shows as "Online" in the SSM console.
+
+2. **Create a Python venv with strands-evals and Harbor installed:**
+
+```bash
+aws ssm send-command \
+  --instance-ids "i-YOUR_INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters '{"commands":["#!/bin/bash","set -e","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","python3 -m venv .venv","source .venv/bin/activate","pip install --upgrade pip","pip install -e \".[harbor]\""]}' \
+  --timeout-seconds 600
+```
+
+3. **Ensure Docker is installed and running** — Harbor needs Docker to run benchmark containers. If not pre-baked into your AMI, the Harbor EC2 environment can bootstrap it, or install manually.
+
+### Per-Invocation Command
+
+Once the instance is set up, each benchmark run looks like:
+
+```bash
+aws ssm send-command \
+  --instance-ids "i-YOUR_INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters '{"commands":["#!/bin/bash","set -e","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","source .venv/bin/activate","export BENCHMARK_S3_BUCKET=your-results-bucket","strands-evals benchmark --name my-run -o jobs/my-output-dir ./path/to/agent -d org/dataset-name -l 1 --debug"]}' \
+  --timeout-seconds 3600
+```
+
+### Key Gotchas
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `source: not found` | SSM defaults to `/bin/sh` (dash) | Add `#!/bin/bash` as the first command |
+| `$HOME not set` | SSM runs with minimal env | `export HOME=/root` |
+| `dubious ownership` | git refuses to operate on dirs owned by another user | `git config --global --add safe.directory /path/to/repo` |
+| `strands-evals: not found` | venv not activated, or PATH missing | Use absolute path to venv activate |
+| `--name` leaks to harbor | argparse REMAINDER consumes flags after the positional | Put `--name` and `-o` **before** the positional `AGENT_DIR` argument |
+| Output truncated (>24KB) | SSM caps stdout/stderr | Add `--output-s3-bucket-name` and `--output-s3-key-prefix` to `send-command` |
+
+### Running Concurrent Benchmarks
+
+Multiple SSM commands run independently on the same instance. To avoid output collisions, give each a distinct `-o` directory:
+
+```bash
+# Run A
+aws ssm send-command ... \
+  '{"commands":["...","strands-evals benchmark --name run-a -o jobs/experiment-a ./agent -d org/dataset-a -l 1"]}' 
+
+# Run B (concurrent)
+aws ssm send-command ... \
+  '{"commands":["...","strands-evals benchmark --name run-b -o jobs/experiment-b ./agent -d org/dataset-b -l 1"]}'
+```
+
+### Long-Running Benchmarks (>30 min)
+
+`--timeout-seconds` supports up to 172800 (48 hours). For very long runs, wrap in `nohup` so the process survives SSM agent restarts:
+
+```bash
+aws ssm send-command \
+  --instance-ids "i-YOUR_INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters '{"commands":["#!/bin/bash","export HOME=/root","cd /home/ubuntu/evals && source .venv/bin/activate","nohup strands-evals benchmark --name long-run -o jobs/long-run ./agent -d org/big-dataset > /tmp/benchmark.log 2>&1 &","echo Started - tail /tmp/benchmark.log to monitor"]}' \
+  --timeout-seconds 60
+```
+
+### Checking Results
+
+```bash
+# Check SSM command status
+aws ssm get-command-invocation \
+  --command-id "COMMAND_ID" \
+  --instance-id "i-YOUR_INSTANCE_ID"
+
+# If using S3 upload in on_benchmark_complete:
+aws s3 ls s3://your-results-bucket/
+```
+
 ## Installation
 
 Ensure you have Python 3.10+ installed, then:
