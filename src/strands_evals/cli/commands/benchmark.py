@@ -54,18 +54,10 @@ def _resolve_aws_creds() -> dict[str, str]:
         return {}
 
 
-_INSTALLED_AGENT_PY = "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"
-_INSTALLED_AGENT_TS = "strands_evals.benchmarks.harbor.installed.ts:StrandsInstalledTSAgent"
-
-
-def _detect_agent_type(agent_path: Path) -> str:
-    """Detect whether the agent directory is Python or TypeScript.
-
-    Returns the harbor --agent import path for the appropriate installed adapter.
-    """
-    if (agent_path / "package.json").exists():
-        return _INSTALLED_AGENT_TS
-    return _INSTALLED_AGENT_PY
+_ADAPTERS = {
+    "python": "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
+    "typescript": "strands_evals.benchmarks.harbor.installed.ts:StrandsInstalledTSAgent",
+}
 
 
 def _resolve_agent_dir_and_module(agent_path: Path) -> tuple[Path, str]:
@@ -116,16 +108,17 @@ def _build_base_harbor_command(args: argparse.Namespace) -> list[str]:
         raise FileNotFoundError(f"Agent path not found: {agent_path}")
 
     agent_dir, agent_module = _resolve_agent_dir_and_module(agent_path)
-    installed_agent = _detect_agent_type(agent_path)
+    runtime = args.runtime
+    installed_agent = _ADAPTERS[runtime]
 
     cmd = ["harbor", "run"]
 
-    # Agent selection (Python or TypeScript adapter based on directory contents)
+    # Agent selection
     cmd.extend(["-a", installed_agent])
 
     # Always upload the directory
     cmd.extend(["--ak", f"agent_path={agent_dir}"])
-    if installed_agent == _INSTALLED_AGENT_TS:
+    if runtime == "typescript":
         cmd.extend(["--ak", f"agent_entry={agent_module}"])
     else:
         cmd.extend(["--ak", f"agent_module={agent_module}"])
@@ -354,7 +347,13 @@ def add_subparser(
     parser.add_argument(
         "agent_file",
         metavar="AGENT_DIR",
-        help="directory containing a .py file that defines `create_agent()` returning a Strands Agent",
+        help="directory containing the agent source (Python or TypeScript)",
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=["python", "typescript"],
+        default="python",
+        help="agent runtime (default: python)",
     )
     parser.add_argument(
         "--name",
