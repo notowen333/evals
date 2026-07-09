@@ -84,12 +84,14 @@ class StrandsInstalledTSAgent(BaseInstalledAgent):
         agent_path: str | None = None,
         agent_entry: str = "agent.js",
         node_version: str = _NODE_VERSION,
+        unpublished_strands_ref: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, **kwargs)
         self._agent_path = Path(agent_path) if agent_path else None
         self._agent_entry = agent_entry
         self._node_version = node_version
+        self._unpublished_strands_ref = unpublished_strands_ref
 
     @staticmethod
     @override
@@ -109,10 +111,13 @@ class StrandsInstalledTSAgent(BaseInstalledAgent):
         if check_result.return_code == 0 and "ok" in (check_result.stdout or ""):
             self.logger.debug("Strands TS agent already installed, skipping")
         else:
-            # Install curl (needed for nvm installer)
+            # Install curl + git (curl for nvm installer, git for --unpublished-strands-ref)
             await self.exec_as_root(
                 environment,
-                command="command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl)",
+                command=(
+                    "(command -v curl >/dev/null && command -v git >/dev/null) || "
+                    "(apt-get update -qq && apt-get install -y -qq curl git)"
+                ),
                 env={"DEBIAN_FRONTEND": "noninteractive"},
             )
 
@@ -138,14 +143,23 @@ class StrandsInstalledTSAgent(BaseInstalledAgent):
             )
             await environment.upload_dir(source_dir=self._agent_path, target_dir=_AGENT_INSTALL_DIR)
 
-            # Install npm dependencies
+            # Install npm dependencies, optionally overriding @strands-agents/sdk with a git ref
+            install_cmd = "npm install --production"
+            if self._unpublished_strands_ref:
+                ref = self._unpublished_strands_ref
+                if not ref.startswith("git+"):
+                    ref = f"git+{ref}"
+                if "#" not in ref:
+                    ref = f"{ref}#subdirectory=strands-ts"
+                install_cmd += f" && npm install {shlex.quote(ref)}"
+
             await self.exec_as_agent(
                 environment,
                 command=(
                     "set -euo pipefail; "
                     '. "$HOME/.nvm/nvm.sh" && '
                     f"cd {_AGENT_INSTALL_DIR} && "
-                    "npm install --production"
+                    f"{install_cmd}"
                 ),
             )
 
