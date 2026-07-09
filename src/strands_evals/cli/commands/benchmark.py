@@ -303,28 +303,36 @@ def _run_batch_parallel(harbor: str, base_cmd: list[str], *, datasets: list[str]
 
 
 def _invoke_on_complete(agent_dir: Path, agent_module: str, job_dir: Path) -> None:
-    """Import the agent class and call on_benchmark_complete if it defines one."""
+    """Call on_benchmark_complete if the agent dir has a Python class defining it.
+
+    This hook always runs on the host via Python — regardless of agent runtime.
+    TS agents that want a post-run hook put a .py file with on_benchmark_complete in their dir.
+    """
     import importlib
     import sys as _sys
 
+    # Only look at .py files for the hook
     if str(agent_dir) not in _sys.path:
         _sys.path.insert(0, str(agent_dir))
 
     try:
-        module_path, symbol_name = agent_module.rsplit(":", 1)
-        mod = importlib.import_module(module_path)
-        symbol = getattr(mod, symbol_name)
-        if isinstance(symbol, type):
-            instance = symbol()
-            hook = getattr(instance, "on_benchmark_complete", None)
-            if hook is not None:
-                import json
+        # Find a Python class with on_benchmark_complete
+        for py_file in sorted(agent_dir.glob("*.py")):
+            mod = importlib.import_module(py_file.stem)
+            for attr_name in dir(mod):
+                symbol = getattr(mod, attr_name)
+                if isinstance(symbol, type):
+                    hook = getattr(symbol, "on_benchmark_complete", None)
+                    if hook is not None and callable(hook):
+                        import json
 
-                results = {}
-                results_path = job_dir / "result.json"
-                if results_path.exists():
-                    results = json.loads(results_path.read_text())
-                hook(job_dir, results)
+                        instance = symbol()
+                        results = {}
+                        results_path = job_dir / "result.json"
+                        if results_path.exists():
+                            results = json.loads(results_path.read_text())
+                        instance.on_benchmark_complete(job_dir, results)
+                        return
     except Exception:
         logger.debug("on_benchmark_complete failed", exc_info=True)
 
