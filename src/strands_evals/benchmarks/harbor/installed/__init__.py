@@ -1,5 +1,6 @@
-"""Installed Strands agent — runs the user's agent unchanged inside the container."""
+"""Installed Strands agents — run user agents unchanged inside Harbor containers."""
 
-from .agent import StrandsInstalledAgent
+from .py import StrandsInstalledAgent
+from .ts import StrandsInstalledTSAgent
 
-__all__ = ["StrandsInstalledAgent"]
+__all__ = ["StrandsInstalledAgent", "StrandsInstalledTSAgent"]

@@ -5,7 +5,7 @@ import json
 import pytest
 from harbor.models.agent.context import AgentContext
 
-from strands_evals.benchmarks.harbor.installed.agent import (
+from strands_evals.benchmarks.harbor.installed.py.agent import (
     _RUNNER_CONTAINER_PATH,
     StrandsInstalledAgent,
 )

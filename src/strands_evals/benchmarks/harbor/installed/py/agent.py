@@ -318,7 +318,7 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         """Convert conversation.json to ATIF and write trajectory.json."""
         from harbor.utils.trajectory_utils import format_trajectory_json
 
-        from .trajectory import convert_strands_to_atif
+        from ..trajectory import convert_strands_to_atif
 
         conversation_path = self.logs_dir / "conversation.json"
         conversation_jsonl_path = self.logs_dir / "conversation.jsonl"
