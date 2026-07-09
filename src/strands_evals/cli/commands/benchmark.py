@@ -6,14 +6,19 @@ passed through.
 
 Usage::
 
-    strands-evals benchmark ./my_agent.py -p <task>
-    strands-evals benchmark ./my_agent.py --task org/task-name --debug
-    strands-evals benchmark ./my_agent.py -p <task> -n 4 --max-retries 2
+    strands-evals benchmark ./my_agent -p <task>
+    strands-evals benchmark ./my_agent --task org/task-name --debug
+    strands-evals benchmark ./my_agent -p <task> -n 4 --max-retries 2
+
+    # Batch: multiple datasets under one name
+    strands-evals benchmark ./my_agent --name my-experiment \\
+        -d org/suite-a -d org/suite-b -d org/suite-c -n 8
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
 import shutil
 import subprocess
@@ -88,8 +93,8 @@ def _resolve_agent_deps(agent_dir: Path) -> str | None:
     return None
 
 
-def _build_harbor_command(args: argparse.Namespace) -> list[str]:
-    """Build the harbor run command from our args + passthrough."""
+def _build_base_harbor_command(args: argparse.Namespace) -> list[str]:
+    """Build the base harbor run command (agent setup, deps, creds). Does not include dataset/job-name/output."""
     agent_path = Path(args.agent_file).resolve()
     if not agent_path.exists():
         raise FileNotFoundError(f"Agent path not found: {agent_path}")
@@ -121,14 +126,30 @@ def _build_harbor_command(args: argparse.Namespace) -> list[str]:
     for key, value in aws_env.items():
         cmd.extend(["--ae", f"{key}={value}"])
 
-    # Job name: explicit --name sets the harbor job directory name
-    if args.name:
-        cmd.extend(["--job-name", args.name])
-
-    # Pass through all remaining harbor flags
-    cmd.extend(args.harbor_args)
-
     return cmd
+
+
+def _extract_datasets_from_harbor_args(harbor_args: list[str]) -> tuple[list[str], list[str]]:
+    """Split harbor_args into (datasets, remaining_args).
+
+    Extracts -d/--dataset values so we can handle them as batch runs.
+    """
+    datasets = []
+    remaining = []
+    skip_next = False
+    for i, arg in enumerate(harbor_args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-d", "--dataset"):
+            if i + 1 < len(harbor_args):
+                datasets.append(harbor_args[i + 1])
+                skip_next = True
+        elif arg.startswith("-d=") or arg.startswith("--dataset="):
+            datasets.append(arg.split("=", 1)[1])
+        else:
+            remaining.append(arg)
+    return datasets, remaining
 
 
 def _find_harbor() -> str | None:
@@ -148,39 +169,124 @@ def _find_latest_job_dir(output_dir: Path) -> Path | None:
     return subdirs[0] if subdirs else None
 
 
+def _dataset_slug(dataset: str) -> str:
+    """Turn 'org/dataset-name@1.0' into a filesystem-safe slug for job naming."""
+    return dataset.replace("/", "--").replace("@", "_")
+
+
+def _run_single(harbor: str, base_cmd: list[str], *, output_dir: Path, job_name: str | None,
+                extra_args: list[str]) -> int:
+    """Execute a single harbor run."""
+    cmd = list(base_cmd)
+    cmd[0] = harbor
+    cmd.extend(["-o", str(output_dir)])
+    if job_name:
+        cmd.extend(["--job-name", job_name])
+    cmd.extend(extra_args)
+    logger.debug("harbor command: %s", " ".join(cmd))
+    return subprocess.run(cmd).returncode
+
+
 def _run(args: argparse.Namespace) -> int:
     harbor = _find_harbor()
     if not harbor:
         print("strands-evals: error: 'harbor' CLI not found. Install with: pip install harbor", file=sys.stderr)  # noqa: T201
         return 2
 
-    # Resolve output dir: explicit -o or default to ./jobs
+    base_cmd = _build_base_harbor_command(args)
     output_dir = Path(args.output) if args.output else Path("jobs")
 
-    cmd = _build_harbor_command(args)
-    cmd[0] = harbor  # replace "harbor" with resolved path
+    # Extract datasets from harbor_args to detect batch mode
+    datasets, remaining_harbor_args = _extract_datasets_from_harbor_args(args.harbor_args)
 
-    # Inject -o if the user specified it (otherwise harbor defaults to ./jobs)
-    if args.output:
-        cmd.extend(["-o", str(output_dir)])
+    if len(datasets) <= 1:
+        # Single run: pass everything through (including the dataset if present)
+        extra_args = list(args.harbor_args)
+        job_name = args.name
+        rc = _run_single(harbor, base_cmd, output_dir=output_dir, job_name=job_name,
+                         extra_args=extra_args)
+        # For single runs, the job dir is the most recent subdir harbor created
+        results_dir = _find_latest_job_dir(output_dir)
+    else:
+        # Batch mode: one harbor run per dataset, all under a shared output dir
+        batch_name = args.name or _generate_batch_name()
+        batch_dir = output_dir / batch_name
+        batch_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.debug("harbor command: %s", " ".join(cmd))
-
-    result = subprocess.run(cmd)
+        if args.parallel:
+            rc = _run_batch_parallel(harbor, base_cmd, datasets=datasets,
+                                     batch_dir=batch_dir,
+                                     remaining_args=remaining_harbor_args)
+        else:
+            rc = _run_batch_sequential(harbor, base_cmd, datasets=datasets,
+                                       batch_dir=batch_dir,
+                                       remaining_args=remaining_harbor_args)
+        # For batch runs, the results dir is the batch dir containing all sub-runs
+        results_dir = batch_dir
 
     # Post-run: call on_benchmark_complete if the agent defines it
-    job_dir = _find_latest_job_dir(output_dir)
-    if job_dir:
+    if results_dir:
         agent_dir, agent_module = _resolve_agent_dir_and_module(Path(args.agent_file).resolve())
-        _invoke_on_complete(agent_dir, agent_module, job_dir)
+        _invoke_on_complete(agent_dir, agent_module, results_dir)
 
     # Also run --post-run shell command if provided
-    if args.post_run and job_dir:
-        post_cmd = args.post_run.replace("{job_dir}", str(job_dir))
+    if args.post_run and results_dir:
+        post_cmd = args.post_run.replace("{job_dir}", str(results_dir))
         logger.debug("post-run: %s", post_cmd)
         subprocess.run(post_cmd, shell=True)
 
-    return result.returncode
+    return rc
+
+
+def _generate_batch_name() -> str:
+    """Generate a timestamp-based batch name."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _run_batch_sequential(harbor: str, base_cmd: list[str], *, datasets: list[str],
+                          batch_dir: Path, remaining_args: list[str]) -> int:
+    """Run multiple datasets sequentially, all results under batch_dir."""
+    worst_rc = 0
+    for i, dataset in enumerate(datasets, 1):
+        print(f"[{i}/{len(datasets)}] Running dataset: {dataset}", file=sys.stderr)  # noqa: T201
+        job_name = _dataset_slug(dataset)
+        extra_args = ["-d", dataset] + remaining_args
+        rc = _run_single(harbor, base_cmd, output_dir=batch_dir, job_name=job_name,
+                         extra_args=extra_args)
+        worst_rc = max(worst_rc, rc)
+        if rc != 0:
+            print(f"  WARNING: dataset {dataset} exited with code {rc}", file=sys.stderr)  # noqa: T201
+    return worst_rc
+
+
+def _run_batch_parallel(harbor: str, base_cmd: list[str], *, datasets: list[str],
+                        batch_dir: Path, remaining_args: list[str]) -> int:
+    """Run multiple datasets concurrently, all results under batch_dir."""
+    worst_rc = 0
+    print(f"Running {len(datasets)} datasets in parallel", file=sys.stderr)  # noqa: T201
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(datasets)) as pool:
+        futures = {}
+        for dataset in datasets:
+            job_name = _dataset_slug(dataset)
+            extra_args = ["-d", dataset] + remaining_args
+            future = pool.submit(_run_single, harbor, base_cmd, output_dir=batch_dir,
+                                 job_name=job_name, extra_args=extra_args)
+            futures[future] = dataset
+
+        for future in concurrent.futures.as_completed(futures):
+            dataset = futures[future]
+            try:
+                rc = future.result()
+            except Exception as exc:
+                logger.error("dataset %s raised: %s", dataset, exc)
+                rc = 1
+            worst_rc = max(worst_rc, rc)
+            status = "OK" if rc == 0 else f"FAILED (exit {rc})"
+            print(f"  {dataset}: {status}", file=sys.stderr)  # noqa: T201
+
+    return worst_rc
 
 
 def _invoke_on_complete(agent_dir: Path, agent_module: str, job_dir: Path) -> None:
@@ -241,6 +347,12 @@ def add_subparser(
         metavar="DIR",
         default=None,
         help="directory to store job results (default: ./jobs)",
+    )
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        default=False,
+        help="run multiple datasets concurrently (default: sequential)",
     )
     parser.add_argument(
         "--post-run",
