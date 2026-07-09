@@ -124,10 +124,13 @@ class StrandsInstalledAgent(BaseInstalledAgent):
         if check_result.return_code == 0:
             self.logger.debug("Strands venv already installed, skipping")
         else:
-            # Ensure curl is present (needed to fetch the uv installer)
+            # Ensure curl + git are present (curl for uv installer, git for --unpublished-strands-ref)
             await self.exec_as_root(
                 environment,
-                command="command -v curl >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq curl)",
+                command=(
+                    "(command -v curl >/dev/null && command -v git >/dev/null) || "
+                    "(apt-get update -qq && apt-get install -y -qq curl git)"
+                ),
                 env={"DEBIAN_FRONTEND": "noninteractive"},
             )
 
