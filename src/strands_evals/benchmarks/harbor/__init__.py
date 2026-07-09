@@ -16,7 +16,7 @@ Optional methods (duck-typed, no import needed):
 """
 
 from .benchmark_agent import BenchmarkAgent
-from .installed import StrandsInstalledAgent
+from .installed import StrandsInstalledPyAgent
 from .installed.ts import StrandsInstalledTSAgent
 
-__all__ = ["BenchmarkAgent", "StrandsInstalledAgent", "StrandsInstalledTSAgent"]
+__all__ = ["BenchmarkAgent", "StrandsInstalledPyAgent", "StrandsInstalledTSAgent"]

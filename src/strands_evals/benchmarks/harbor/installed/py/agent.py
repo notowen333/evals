@@ -7,7 +7,7 @@ because the agent process itself is inside the container.
 Usage::
 
     harbor run \\
-      --agent strands_evals.benchmarks.harbor.installed:StrandsInstalledAgent \\
+      --agent strands_evals.benchmarks.harbor.installed:StrandsInstalledPyAgent \\
       --model us.anthropic.claude-sonnet-4-6 \\
       --ak agent_module=my_agent:agent \\
       --ak agent_path=./my_agent.py \\
@@ -43,7 +43,7 @@ _RESULT_PATH = str(EnvironmentPaths.agent_dir / "result.json")
 _LOG_PATH = str(EnvironmentPaths.agent_dir / "strands.log")
 
 
-class StrandsInstalledAgent(BaseInstalledAgent):
+class StrandsInstalledPyAgent(BaseInstalledAgent):
     """Run any Strands agent inside the Harbor container.
 
     The user provides their agent file and a module:attribute pointing at the Agent

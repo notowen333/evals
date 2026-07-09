@@ -27,7 +27,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_INSTALLED_AGENT = "strands_evals.benchmarks.harbor.installed:StrandsInstalledAgent"
+_INSTALLED_AGENT = "strands_evals.benchmarks.harbor.installed:StrandsInstalledPyAgent"
 
 
 def _resolve_aws_creds() -> dict[str, str]:

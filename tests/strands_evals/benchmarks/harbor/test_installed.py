@@ -1,4 +1,4 @@
-"""Unit tests for StrandsInstalledAgent (install, run, populate_context_post_run)."""
+"""Unit tests for StrandsInstalledPyAgent (install, run, populate_context_post_run)."""
 
 import json
 
@@ -7,14 +7,14 @@ from harbor.models.agent.context import AgentContext
 
 from strands_evals.benchmarks.harbor.installed.py.agent import (
     _RUNNER_CONTAINER_PATH,
-    StrandsInstalledAgent,
+    StrandsInstalledPyAgent,
 )
 
 from .conftest import FakeEnvironment, FakeExecResult
 
 
 def _make_agent(tmp_path, **kwargs):
-    return StrandsInstalledAgent(logs_dir=tmp_path, **kwargs)
+    return StrandsInstalledPyAgent(logs_dir=tmp_path, **kwargs)
 
 
 def _install_env():
@@ -138,7 +138,7 @@ def test_populate_context_handles_error_result(tmp_path):
 
 
 def test_name():
-    assert StrandsInstalledAgent.name() == "strands-installed"
+    assert StrandsInstalledPyAgent.name() == "strands-installed"
 
 
 def test_version_command(tmp_path):
