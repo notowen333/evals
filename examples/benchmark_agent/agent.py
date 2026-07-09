@@ -54,7 +54,7 @@ You will be given a task. Complete it by modifying files and running commands.
 """
 
 
-S3_BUCKET = "my-benchmark-results"  # TODO: replace with your bucket
+S3_BUCKET = os.environ.get("BENCHMARK_S3_BUCKET", "my-benchmark-results")
 
 
 class MyAgent:
