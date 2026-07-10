@@ -180,7 +180,7 @@ aws ssm send-command \
 | `strands-evals: not found` | venv not activated, or PATH missing | Use absolute path to venv activate |
 | `--name` leaks to harbor | argparse REMAINDER consumes flags after the positional | Put `--name` and `-o` **before** the positional `AGENT_DIR` argument |
 | Output truncated (>24KB) | SSM caps stdout/stderr | Add `--output-s3-bucket-name` and `--output-s3-key-prefix` to `send-command` |
-| `TimedOut` after 1 hour | `AWS-RunShellScript` hard caps at 3600s | Use `nohup` to detach the process (see Long-Running section below) |
+| `TimedOut` after 1 hour | `executionTimeout` defaults to 3600s | Pass `executionTimeout=["50400"]` in `--parameters`, or use `nohup` (see below) |
 
 ### Running Concurrent Benchmarks
 
@@ -198,19 +198,40 @@ aws ssm send-command ... \
 
 ### Long-Running Benchmarks (>1 hour)
 
-**`AWS-RunShellScript` has a hard max timeout of 3600 seconds (1 hour)**, regardless of what you pass to `--timeout-seconds`. Any run longer than that will be killed with `TimedOut` status.
+`AWS-RunShellScript` has **two** timeout parameters that are easily confused:
 
-For benchmarks that take longer (e.g. full SWE-bench at 500 tasks), use `nohup` to detach the process from SSM entirely:
+| Parameter | Controls | Default | Max |
+|-----------|----------|---------|-----|
+| `--timeout-seconds` | **Delivery** — how long SSM waits for the agent to pick up the command | 3600s | 30 days |
+| `executionTimeout` (document parameter) | **Execution** — how long the command can run | **3600s (1 hour)** | 172800s (48 hours) |
+
+If you only set `--timeout-seconds`, your command still dies at 1 hour because `executionTimeout` defaults to 3600s.
+
+**Option A: Increase `executionTimeout` (preferred for <48 hours)**
+
+SSM tracks completion natively — you get status, stdout, and stderr:
 
 ```bash
 aws ssm send-command \
   --instance-ids "i-YOUR_INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["#!/bin/bash","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","source .venv/bin/activate","export BENCHMARK_S3_BUCKET=your-results-bucket","nohup strands-evals benchmark --name my-run -o jobs/my-run ./agent -d org/big-dataset -n 4 --debug > /home/ubuntu/my-run.log 2>&1 &","echo \"PID: $!\""]}' \
+  --parameters '{"commands":["#!/bin/bash","set -e","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","source .venv/bin/activate","export BENCHMARK_S3_BUCKET=your-results-bucket","strands-evals benchmark --name my-run -o jobs/my-run ./agent -d org/big-dataset -n 4 --debug"],"executionTimeout":["50400"]}' \
+  --timeout-seconds 50400
+```
+
+**Option B: Fire-and-forget with `nohup` (any duration, SSM loses tracking)**
+
+For runs that might exceed 48 hours, or if you want the SSM command to return immediately:
+
+```bash
+aws ssm send-command \
+  --instance-ids "i-YOUR_INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters '{"commands":["#!/bin/bash","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","source .venv/bin/activate","export BENCHMARK_S3_BUCKET=your-results-bucket","nohup strands-evals benchmark --name my-run -o jobs/my-run ./agent -d org/big-dataset -n 4 --debug > /home/ubuntu/my-run.log 2>&1 < /dev/null &","disown $!","echo \"PID: $!\""]}' \
   --timeout-seconds 120
 ```
 
-The SSM command returns immediately with the PID. The benchmark runs independently until complete. Monitor progress:
+Monitor progress via separate SSM commands:
 
 ```bash
 # Tail the log
