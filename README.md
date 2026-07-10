@@ -158,6 +158,17 @@ aws ssm send-command \
 
 3. **Ensure Docker is installed and running** — Harbor needs Docker to run benchmark containers. If not pre-baked into your AMI, the Harbor EC2 environment can bootstrap it, or install manually.
 
+4. **Expand Docker's network address pool (required for high concurrency)** — Docker defaults to ~16 bridge networks. At `-n 16`+ you'll hit `all predefined address pools have been fully subnetted`. Fix:
+
+```bash
+aws ssm send-command \
+  --instance-ids "i-YOUR_INSTANCE_ID" \
+  --document-name "AWS-RunShellScript" \
+  --parameters '{"commands":["#!/bin/bash","mkdir -p /etc/docker","echo {\"default-address-pools\": [{\"base\": \"10.0.0.0/8\", \"size\": 24}]} > /etc/docker/daemon.json","systemctl restart docker"]}'
+```
+
+This gives ~65,000 available networks instead of 16, supporting `-n 64` or higher.
+
 ### Per-Invocation Command
 
 Once the instance is set up, each benchmark run looks like:
@@ -181,6 +192,7 @@ aws ssm send-command \
 | `--name` leaks to harbor | argparse REMAINDER consumes flags after the positional | Put `--name` and `-o` **before** the positional `AGENT_DIR` argument |
 | Output truncated (>24KB) | SSM caps stdout/stderr | Add `--output-s3-bucket-name` and `--output-s3-key-prefix` to `send-command` |
 | `TimedOut` after 1 hour | `executionTimeout` defaults to 3600s | Pass `executionTimeout=["50400"]` in `--parameters`, or use `nohup` (see below) |
+| `address pools fully subnetted` | Docker's default pool only supports ~16 networks | Expand pool in `/etc/docker/daemon.json` (see One-Time Setup step 4) |
 
 ### Running Concurrent Benchmarks
 
