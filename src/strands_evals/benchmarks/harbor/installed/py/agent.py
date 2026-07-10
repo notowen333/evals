@@ -131,7 +131,7 @@ class StrandsInstalledPyAgent(BaseStrandsInstalledAgent):
                     "set -euo pipefail; "
                     "curl -LsSf https://astral.sh/uv/install.sh | sh && "
                     'if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi && '
-                    f"uv venv {_VENV_PATH} --clear && "
+                    f"uv venv {_VENV_PATH} --clear --python 3.12 && "
                     f"source {_VENV_PATH}/bin/activate && "
                     f"uv pip install {deps_str}"
                 ),
