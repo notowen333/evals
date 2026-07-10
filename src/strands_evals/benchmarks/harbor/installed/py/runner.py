@@ -72,6 +72,30 @@ def _dump_conversation(output_dir: Path, all_messages: list, agent) -> None:
         pass
 
 
+def _capture_patch(output_dir: Path) -> None:
+    """Write a unified diff of all changes in the working tree to patch.diff."""
+    import subprocess
+
+    try:
+        # Find the git repo root (workdir varies per task)
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if root.returncode != 0:
+            return
+        repo_root = root.stdout.strip()
+        result = subprocess.run(
+            ["git", "diff", "HEAD"],
+            capture_output=True, text=True, timeout=30,
+            cwd=repo_root,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            (output_dir / "patch.diff").write_text(result.stdout)
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a Strands agent inside a Harbor container.")
     parser.add_argument("--agent", required=True, help="Import path to the Agent instance (module:attribute)")
@@ -226,6 +250,9 @@ def main() -> int:
 
     # Write the full conversation for ATIF trajectory conversion.
     _dump_conversation(output_path.parent, all_messages, agent)
+
+    # Capture git patch of all changes the agent made.
+    _capture_patch(output_path.parent)
 
     return 0
 

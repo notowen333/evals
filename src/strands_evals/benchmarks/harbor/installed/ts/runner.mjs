@@ -140,6 +140,22 @@ await writeResult({
 // Write conversation for ATIF trajectory conversion
 await writeConversation(agent)
 
+// Capture git patch of all changes the agent made
+await capturePatch()
+
+async function capturePatch() {
+  try {
+    const { execSync } = await import('node:child_process')
+    const root = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', timeout: 5000 }).trim()
+    const diff = execSync('git diff HEAD', { cwd: root, encoding: 'utf8', timeout: 30000 })
+    if (diff.trim()) {
+      await writeFile(join(dirname(outputPath), 'patch.diff'), diff)
+    }
+  } catch {
+    // best-effort — not all tasks are git repos
+  }
+}
+
 async function writeConversation(agent) {
   try {
     const conversationPath = join(dirname(outputPath), 'conversation.json')
