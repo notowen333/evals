@@ -180,6 +180,7 @@ aws ssm send-command \
 | `strands-evals: not found` | venv not activated, or PATH missing | Use absolute path to venv activate |
 | `--name` leaks to harbor | argparse REMAINDER consumes flags after the positional | Put `--name` and `-o` **before** the positional `AGENT_DIR` argument |
 | Output truncated (>24KB) | SSM caps stdout/stderr | Add `--output-s3-bucket-name` and `--output-s3-key-prefix` to `send-command` |
+| `TimedOut` after 1 hour | `AWS-RunShellScript` hard caps at 3600s | Use `nohup` to detach the process (see Long-Running section below) |
 
 ### Running Concurrent Benchmarks
 
@@ -195,16 +196,30 @@ aws ssm send-command ... \
   '{"commands":["...","strands-evals benchmark --name run-b -o jobs/experiment-b ./agent -d org/dataset-b -l 1"]}'
 ```
 
-### Long-Running Benchmarks (>30 min)
+### Long-Running Benchmarks (>1 hour)
 
-`--timeout-seconds` supports up to 172800 (48 hours). For very long runs, wrap in `nohup` so the process survives SSM agent restarts:
+**`AWS-RunShellScript` has a hard max timeout of 3600 seconds (1 hour)**, regardless of what you pass to `--timeout-seconds`. Any run longer than that will be killed with `TimedOut` status.
+
+For benchmarks that take longer (e.g. full SWE-bench at 500 tasks), use `nohup` to detach the process from SSM entirely:
 
 ```bash
 aws ssm send-command \
   --instance-ids "i-YOUR_INSTANCE_ID" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["#!/bin/bash","export HOME=/root","cd /home/ubuntu/evals && source .venv/bin/activate","nohup strands-evals benchmark --name long-run -o jobs/long-run ./agent -d org/big-dataset > /tmp/benchmark.log 2>&1 &","echo Started - tail /tmp/benchmark.log to monitor"]}' \
-  --timeout-seconds 60
+  --parameters '{"commands":["#!/bin/bash","export HOME=/root","export PATH=/usr/local/bin:/usr/bin:/bin","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","source .venv/bin/activate","export BENCHMARK_S3_BUCKET=your-results-bucket","nohup strands-evals benchmark --name my-run -o jobs/my-run ./agent -d org/big-dataset -n 4 --debug > /home/ubuntu/my-run.log 2>&1 &","echo \"PID: $!\""]}' \
+  --timeout-seconds 120
+```
+
+The SSM command returns immediately with the PID. The benchmark runs independently until complete. Monitor progress:
+
+```bash
+# Tail the log
+aws ssm send-command ... \
+  --parameters '{"commands":["tail -30 /home/ubuntu/my-run.log"]}'
+
+# Check if the process is still running
+aws ssm send-command ... \
+  --parameters '{"commands":["ps -p <PID> -o pid,etime,cmd"]}'
 ```
 
 ### Checking Results
