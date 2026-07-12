@@ -81,6 +81,7 @@ AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
 CONCURRENCY = os.environ.get("CONCURRENCY", "500")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE", "t3.medium")
+ROOT_VOLUME_GB = os.environ.get("ROOT_VOLUME_GB", "64")
 KEY_NAME = os.environ.get("KEY_NAME", "harbor-benchmark")
 SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH", os.path.expanduser("~/.ssh/harbor-benchmark.pem"))
 SECURITY_GROUP = os.environ.get("SECURITY_GROUP", "sg-0657fe39a6bbbc8f6")
@@ -88,8 +89,38 @@ SUBNET = os.environ.get("SUBNET", "subnet-0ca6e05ed9d6e1871")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 JOB_NAME = os.environ.get("JOB_NAME", "ec2-fleet")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "jobs/ec2-fleet")
+N_TASKS = os.environ.get("N_TASKS")  # optional: cap number of tasks (for testing)
+# Optional: attach an IAM instance profile (name or ARN) to each fleet instance.
+# When set, the instance's role provides AWS access (auto-refreshing), so we skip
+# forwarding the orchestrator's credentials as env vars. The role needs only
+# bedrock:InvokeModel + bedrock:InvokeModelWithResponseStream on the model.
+IAM_INSTANCE_PROFILE = os.environ.get("IAM_INSTANCE_PROFILE")
 
 os.environ.setdefault("BENCHMARK_S3_BUCKET", "strands-benchmark-results")
+
+
+def _resolve_aws_creds() -> dict[str, str]:
+    """Resolve AWS creds from the boto3 session (SSO, profiles, env, instance role).
+
+    These are injected into every fleet instance via --ae so the agent can reach
+    Bedrock. Env vars alone are not enough when using SSO / assumed roles.
+    """
+    import boto3
+    session = boto3.Session(region_name=REGION)
+    creds = session.get_credentials()
+    if creds is None:
+        raise SystemExit("No AWS credentials found — run `aws sso login` or set creds.")
+    frozen = creds.get_frozen_credentials()
+    env = {"AWS_ACCESS_KEY_ID": frozen.access_key, "AWS_SECRET_ACCESS_KEY": frozen.secret_key}
+    if frozen.token:
+        env["AWS_SESSION_TOKEN"] = frozen.token
+    env["AWS_REGION"] = REGION
+    return env
+
+
+# If an instance profile is attached, the node authenticates via its role — no
+# need to forward the orchestrator's creds (avoids token expiry + creds in argv).
+_aws_creds = {} if IAM_INSTANCE_PROFILE else _resolve_aws_creds()
 
 sys.argv = [
     "harbor", "run",
@@ -98,20 +129,20 @@ sys.argv = [
     "--ak", f"agent_module={AGENT_MODULE}",
     "-d", DATASET,
     "-n", CONCURRENCY,
+    *(["-l", N_TASKS] if N_TASKS else []),
     "-e", "ec2",
     "--ek", f"region={REGION}",
     "--ek", "ami_id=ami-0a02a779008fa3b99",
     "--ek", f"instance_type={INSTANCE_TYPE}",
+    "--ek", f"root_volume_size_gb={ROOT_VOLUME_GB}",
     "--ek", f"key_name={KEY_NAME}",
     "--ek", f"ssh_key_path={SSH_KEY_PATH}",
     "--ek", f'security_group_ids=["{SECURITY_GROUP}"]',
     "--ek", f"subnet_id={SUBNET}",
     "--ek", "ssh_user=ubuntu",
     "--ek", "bootstrap_docker=true",
-    "--ae", f"AWS_ACCESS_KEY_ID={os.environ.get('AWS_ACCESS_KEY_ID', '')}",
-    "--ae", f"AWS_SECRET_ACCESS_KEY={os.environ.get('AWS_SECRET_ACCESS_KEY', '')}",
-    "--ae", f"AWS_SESSION_TOKEN={os.environ.get('AWS_SESSION_TOKEN', '')}",
-    "--ae", f"AWS_REGION={REGION}",
+    *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
+    *[arg for k, v in _aws_creds.items() for arg in ("--ae", f"{k}={v}")],
     "-o", OUTPUT_DIR,
     "--job-name", JOB_NAME,
     "--max-retries", "2",
@@ -119,5 +150,37 @@ sys.argv = [
     "--debug",
 ]
 
+def _upload_results_to_s3():
+    """Upload the finished job_dir to S3.
+
+    Harbor has no knowledge of on_benchmark_complete — that hook only fires in
+    the strands-evals wrapper, which we bypass. So the orchestrator uploads here
+    after the run finishes. Nodes never touch S3; results aggregate locally in
+    OUTPUT_DIR first, then sync up in one pass.
+    """
+    bucket = os.environ.get("BENCHMARK_S3_BUCKET")
+    if not bucket:
+        return
+    job_dir = os.path.join(OUTPUT_DIR, JOB_NAME)
+    if not os.path.isdir(job_dir):
+        print(f"S3 upload skipped: {job_dir} not found", file=sys.stderr)
+        return
+    import boto3
+    from pathlib import Path
+    s3 = boto3.client("s3", region_name=REGION)
+    count = 0
+    for path in Path(job_dir).rglob("*"):
+        if path.is_file():
+            key = f"{JOB_NAME}/{path.relative_to(job_dir)}"
+            s3.upload_file(str(path), bucket, key)
+            count += 1
+    print(f"Uploaded {count} files to s3://{bucket}/{JOB_NAME}/", file=sys.stderr)
+
+
 from harbor.cli.main import app
-app()
+
+try:
+    app()
+finally:
+    # app() raises SystemExit (typer); upload runs regardless of exit code.
+    _upload_results_to_s3()
