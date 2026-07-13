@@ -157,15 +157,34 @@ await writeConversation(agent)
 await capturePatch()
 
 async function capturePatch() {
+  // The task repo is NOT at the runner's cwd — it lives at the task workdir
+  // (e.g. /testbed for SWE-bench, /app). Probe common locations plus any git
+  // repo near the root, and diff the first with uncommitted changes.
+  const { execSync } = await import('node:child_process')
+  const diffRepo = (repo) => {
+    try {
+      execSync('git add -AN', { cwd: repo, timeout: 15000 })  // -N so new files show
+      const out = execSync('git diff HEAD', { cwd: repo, encoding: 'utf8', timeout: 30000 })
+      return out.trim() ? out : null
+    } catch { return null }
+  }
+  const candidates = ['/testbed', '/app', process.cwd()]
   try {
-    const { execSync } = await import('node:child_process')
-    const root = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', timeout: 5000 }).trim()
-    const diff = execSync('git diff HEAD', { cwd: root, encoding: 'utf8', timeout: 30000 })
-    if (diff.trim()) {
-      await writeFile(join(dirname(outputPath), 'patch.diff'), diff)
+    const found = execSync('find / -maxdepth 3 -name .git -type d 2>/dev/null | head -5',
+      { encoding: 'utf8', timeout: 20000, shell: '/bin/bash' })
+    for (const p of found.split('\n')) {
+      if (p.endsWith('/.git')) candidates.push(p.slice(0, -5))
     }
-  } catch {
-    // best-effort — not all tasks are git repos
+  } catch { /* best-effort */ }
+  const seen = new Set()
+  for (const repo of candidates) {
+    if (!repo || seen.has(repo)) continue
+    seen.add(repo)
+    const diff = diffRepo(repo)
+    if (diff) {
+      await writeFile(join(dirname(outputPath), 'patch.diff'), diff)
+      return
+    }
   }
 }
 

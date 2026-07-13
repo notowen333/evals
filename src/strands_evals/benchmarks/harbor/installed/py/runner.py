@@ -96,27 +96,46 @@ def _dump_conversation(output_dir: Path, all_messages: list, agent) -> None:
 
 
 def _capture_patch(output_dir: Path) -> None:
-    """Write a unified diff of all changes in the working tree to patch.diff."""
+    """Write a unified diff of the agent's code changes to patch.diff.
+
+    The task repo is NOT at the runner's cwd (/installed-agent/user) — it lives
+    at the task's workdir, e.g. /testbed (SWE-bench) or /app. Probe the common
+    locations, plus any git repo found near the filesystem root, and diff the
+    first one that has uncommitted changes.
+    """
     import subprocess
 
+    def _diff(repo_root: str) -> str | None:
+        try:
+            # add -N so newly created files show in the diff
+            subprocess.run(["git", "add", "-AN"], cwd=repo_root,
+                           capture_output=True, timeout=15)
+            r = subprocess.run(["git", "diff", "HEAD"], cwd=repo_root,
+                               capture_output=True, text=True, timeout=30)
+            return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+        except Exception:
+            return None
+
+    candidates = ["/testbed", "/app", os.getcwd()]
+    # Also discover git repos one level under root (covers unusual layouts)
     try:
-        # Find the git repo root (workdir varies per task)
-        root = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
+        found = subprocess.run(
+            ["bash", "-lc", "find / -maxdepth 3 -name .git -type d 2>/dev/null | head -5"],
+            capture_output=True, text=True, timeout=20,
         )
-        if root.returncode != 0:
-            return
-        repo_root = root.stdout.strip()
-        result = subprocess.run(
-            ["git", "diff", "HEAD"],
-            capture_output=True, text=True, timeout=30,
-            cwd=repo_root,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            (output_dir / "patch.diff").write_text(result.stdout)
+        candidates += [p[:-5] for p in found.stdout.split() if p.endswith("/.git")]
     except Exception:
         pass
+
+    seen = set()
+    for repo in candidates:
+        if not repo or repo in seen:
+            continue
+        seen.add(repo)
+        diff = _diff(repo)
+        if diff:
+            (output_dir / "patch.diff").write_text(diff)
+            return
 
 
 def main() -> int:
