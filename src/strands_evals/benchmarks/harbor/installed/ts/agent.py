@@ -56,6 +56,9 @@ class StrandsInstalledTSAgent(BaseStrandsInstalledAgent):
         agent_entry = shlex.quote(self._agent_entry)
         parts = [
             '. "$HOME/.nvm/nvm.sh" &&',
+            # Capture Harbor's task workdir (our cwd here) before cd-ing away,
+            # so the runner can diff the task repo for patch.diff.
+            'export HARBOR_TASK_WORKDIR="$(pwd)" &&',
             f"cd {_AGENT_INSTALL_DIR} &&",
             f"node {_RUNNER_CONTAINER_PATH}",
             f"--agent {agent_entry}",

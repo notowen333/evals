@@ -98,40 +98,53 @@ def _dump_conversation(output_dir: Path, all_messages: list, agent) -> None:
 def _capture_patch(output_dir: Path) -> None:
     """Write a unified diff of the agent's code changes to patch.diff.
 
-    The task repo is NOT at the runner's cwd (/installed-agent/user) — it lives
-    at the task's workdir, e.g. /testbed (SWE-bench) or /app. Probe the common
-    locations, plus any git repo found near the filesystem root, and diff the
-    first one that has uncommitted changes.
+    The task repo is NOT at the runner's cwd — the run command cd's into the
+    agent install dir before invoking us. The adapter captures Harbor's task
+    workdir (task_env_config.workdir, where the agent's tools operate) into
+    HARBOR_TASK_WORKDIR beforehand. Mirroring Harbor's own SWE-agent adapter,
+    we resolve the repo as: $HARBOR_TASK_WORKDIR, then /testbed (SWE-bench
+    convention), and diff the first that is a git repo with changes.
+
+    `git diff HEAD` is read-only and captures modifications to tracked files —
+    the same basis SWE-bench uses for its gold patches. Untracked files are
+    appended separately without mutating the index.
     """
     import subprocess
 
     def _diff(repo_root: str) -> str | None:
         try:
-            # add -N so newly created files show in the diff
-            subprocess.run(["git", "add", "-AN"], cwd=repo_root,
-                           capture_output=True, timeout=15)
-            r = subprocess.run(["git", "diff", "HEAD"], cwd=repo_root,
-                               capture_output=True, text=True, timeout=30)
-            return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+            inside = subprocess.run(
+                ["git", "-C", repo_root, "rev-parse", "--is-inside-work-tree"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if inside.returncode != 0:
+                return None
+            tracked = subprocess.run(
+                ["git", "-C", repo_root, "diff", "HEAD"],
+                capture_output=True, text=True, timeout=30,
+            )
+            out = tracked.stdout if tracked.returncode == 0 else ""
+            # Append untracked files as diffs without touching the index.
+            untracked = subprocess.run(
+                ["git", "-C", repo_root, "ls-files", "--others", "--exclude-standard"],
+                capture_output=True, text=True, timeout=15,
+            )
+            for path in (untracked.stdout or "").splitlines():
+                if not path.strip():
+                    continue
+                d = subprocess.run(
+                    ["git", "-C", repo_root, "diff", "--no-index", "/dev/null", path],
+                    capture_output=True, text=True, timeout=15,
+                )
+                out += d.stdout or ""
+            return out if out.strip() else None
         except Exception:
             return None
 
-    candidates = ["/testbed", "/app", os.getcwd()]
-    # Also discover git repos one level under root (covers unusual layouts)
-    try:
-        found = subprocess.run(
-            ["bash", "-lc", "find / -maxdepth 3 -name .git -type d 2>/dev/null | head -5"],
-            capture_output=True, text=True, timeout=20,
-        )
-        candidates += [p[:-5] for p in found.stdout.split() if p.endswith("/.git")]
-    except Exception:
-        pass
-
-    seen = set()
+    candidates = [os.environ.get("HARBOR_TASK_WORKDIR"), "/testbed"]
     for repo in candidates:
-        if not repo or repo in seen:
+        if not repo:
             continue
-        seen.add(repo)
         diff = _diff(repo)
         if diff:
             (output_dir / "patch.diff").write_text(diff)
