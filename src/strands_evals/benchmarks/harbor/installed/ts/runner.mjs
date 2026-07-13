@@ -40,6 +40,23 @@ async function writeResult(data) {
   await writeFile(outputPath, JSON.stringify(data, null, 2))
 }
 
+// Map Strands' accumulatedUsage to Harbor's token fields. Strands reports four
+// mutually-exclusive counts (uncached input, cache read, cache write, output);
+// Harbor's n_input_tokens is defined as "including cache", so input_tokens is
+// the full input side and cache_tokens is all cache activity. Raw usage is
+// still dumped alongside for the exact read/write split.
+function tokenFields(usage) {
+  usage = usage ?? {}
+  const uncached = usage.inputTokens ?? 0
+  const cacheRead = usage.cacheReadInputTokens ?? 0
+  const cacheWrite = usage.cacheWriteInputTokens ?? 0
+  return {
+    input_tokens: uncached + cacheRead + cacheWrite,
+    output_tokens: usage.outputTokens ?? null,
+    cache_tokens: cacheRead + cacheWrite,
+  }
+}
+
 // Import the user's agent module
 let agentModule
 try {
@@ -89,9 +106,7 @@ try {
   await writeResult({
     error: String(err),
     stop_reason: 'error',
-    input_tokens: usage.inputTokens ?? null,
-    output_tokens: usage.outputTokens ?? null,
-    cache_tokens: usage.cacheReadInputTokens ?? null,
+    ...tokenFields(usage),
     cycle_count: metrics?.cycleCount ?? null,
     accumulated_usage: usage,
   })
@@ -127,9 +142,7 @@ for (const [name, tm] of Object.entries(rawToolMetrics)) {
 }
 
 await writeResult({
-  input_tokens: usage.inputTokens ?? null,
-  output_tokens: usage.outputTokens ?? null,
-  cache_tokens: usage.cacheReadInputTokens ?? null,
+  ...tokenFields(usage),
   stop_reason: result.stopReason ?? null,
   cycle_count: metrics?.cycleCount ?? null,
   accumulated_usage: usage,

@@ -52,6 +52,29 @@ def _import_agent(agent_spec: str):
     return agent, None, None
 
 
+def _token_fields(usage: dict) -> dict:
+    """Map Strands' accumulated_usage to Harbor's token fields.
+
+    Strands reports four mutually-exclusive counts that sum to totalTokens:
+    inputTokens (uncached), cacheReadInputTokens, cacheWriteInputTokens,
+    outputTokens. Harbor's AgentContext only has n_input_tokens (defined as
+    "including cache"), n_cache_tokens, and n_output_tokens.
+
+    So input_tokens is the FULL input side (uncached + cache read + cache write)
+    to match Harbor's definition, and cache_tokens is all cache activity. The
+    raw accumulated_usage is still dumped alongside for the exact read/write split.
+    """
+    usage = usage or {}
+    uncached = usage.get("inputTokens") or 0
+    cache_read = usage.get("cacheReadInputTokens") or 0
+    cache_write = usage.get("cacheWriteInputTokens") or 0
+    return {
+        "input_tokens": uncached + cache_read + cache_write,
+        "output_tokens": usage.get("outputTokens"),
+        "cache_tokens": cache_read + cache_write,
+    }
+
+
 def _write_result(output_path: Path, data: dict) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w") as f:
@@ -153,9 +176,7 @@ def main() -> int:
             {
                 "error": "Agent timed out (SIGTERM)",
                 "stop_reason": "timeout",
-                "input_tokens": usage.get("inputTokens"),
-                "output_tokens": usage.get("outputTokens"),
-                "cache_tokens": usage.get("cacheReadInputTokens"),
+                **_token_fields(usage),
                 "cycle_count": getattr(metrics, "cycle_count", None),
                 "accumulated_usage": dict(usage) if usage else None,
             },
@@ -189,9 +210,7 @@ def main() -> int:
             {
                 "error": traceback.format_exc(),
                 "stop_reason": "error",
-                "input_tokens": usage.get("inputTokens"),
-                "output_tokens": usage.get("outputTokens"),
-                "cache_tokens": usage.get("cacheReadInputTokens"),
+                **_token_fields(usage),
                 "cycle_count": getattr(metrics, "cycle_count", None),
                 "accumulated_usage": dict(usage) if usage else None,
             },
@@ -235,9 +254,7 @@ def main() -> int:
     _write_result(
         output_path,
         {
-            "input_tokens": usage.get("inputTokens"),
-            "output_tokens": usage.get("outputTokens"),
-            "cache_tokens": usage.get("cacheReadInputTokens"),
+            **_token_fields(usage),
             "stop_reason": getattr(result, "stop_reason", None),
             "cycle_count": getattr(metrics, "cycle_count", None),
             "accumulated_usage": dict(usage) if usage else None,
