@@ -22,6 +22,19 @@ import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+# --- File descriptor limit ---
+# Each concurrent SSH session to a fleet node uses several FDs. At 500 nodes the
+# default soft limit (1024 on Ubuntu/macOS) is exhausted, stalling SSH setup.
+# Raise the soft limit toward the hard limit before anything opens sockets.
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    _target = min(100_000, _hard) if _hard != resource.RLIM_INFINITY else 100_000
+    if _soft < _target:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_target, _hard))
+except Exception as _e:
+    print(f"Could not raise FD limit: {_e}", file=sys.stderr)
+
 # --- Orphan cleanup ---
 # If the orchestrator dies, terminate all fleet instances so we don't leak EC2s.
 KEY_NAME = os.environ.get("KEY_NAME", "harbor-benchmark")
@@ -147,6 +160,7 @@ sys.argv = [
     "--job-name", JOB_NAME,
     "--max-retries", "2",
     "--retry-include", "EnvironmentStartTimeoutError",
+    "--retry-include", "RuntimeError",
     "--debug",
 ]
 
