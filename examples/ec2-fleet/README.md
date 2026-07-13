@@ -69,6 +69,19 @@ orchestrator first, then upload in one pass.
 
 These are the things that broke, and the fixes baked into `run.py`:
 
+### 0. Run the orchestrator on a big box, not your laptop
+This was the single biggest finding. The orchestrator holds ~500 concurrent
+SSH sessions to the fleet and services each node's setup commands (install uv +
+strands) over those sessions. A laptop (10 cores) can't keep up: the setup
+phase stalls and **every** trial hits `AgentSetupTimeoutError` (we saw 0/500
+agents even start). The same run from a 32-core EC2 orchestrator: 0 setup
+timeouts, 488/500 agents started, load stayed under 6. It looked like a
+networking problem but was orchestrator-side CPU/SSH capacity.
+
+Run `run.py` on a ≥16-core instance (we used c7i.8xlarge), ideally via SSM +
+`nohup` so it survives disconnection. With an instance profile attached to the
+orchestrator (see #5), boto3 picks up creds automatically — no `aws sso login`.
+
 ### 1. Thread pool — the reason for the in-process design
 Harbor's EC2 environment uses `asyncio.to_thread()` for blocking boto3 waiter
 calls (`instance_running`, `instance_status_ok`). Python's default thread pool
