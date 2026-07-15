@@ -16,6 +16,8 @@ report_files
 .venv
 .harbor-venv
 jobs/
+/stan/
+strands_stan/
 *.egg-info
 *.DS_Store*
 uv.lock

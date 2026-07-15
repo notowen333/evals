@@ -156,6 +156,7 @@ sys.argv = [
     "--ek", "bootstrap_docker=true",
     *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
     *[arg for k, v in _aws_creds.items() for arg in ("--ae", f"{k}={v}")],
+    *(["--ae", f"STRANDS_MODEL={os.environ['STRANDS_MODEL']}"] if os.environ.get("STRANDS_MODEL") else []),
     "-o", OUTPUT_DIR,
     "--job-name", JOB_NAME,
     "--max-retries", "2",
@@ -164,37 +165,5 @@ sys.argv = [
     "--debug",
 ]
 
-def _upload_results_to_s3():
-    """Upload the finished job_dir to S3.
-
-    Harbor has no knowledge of on_benchmark_complete — that hook only fires in
-    the strands-evals wrapper, which we bypass. So the orchestrator uploads here
-    after the run finishes. Nodes never touch S3; results aggregate locally in
-    OUTPUT_DIR first, then sync up in one pass.
-    """
-    bucket = os.environ.get("BENCHMARK_S3_BUCKET")
-    if not bucket:
-        return
-    job_dir = os.path.join(OUTPUT_DIR, JOB_NAME)
-    if not os.path.isdir(job_dir):
-        print(f"S3 upload skipped: {job_dir} not found", file=sys.stderr)
-        return
-    import boto3
-    from pathlib import Path
-    s3 = boto3.client("s3", region_name=REGION)
-    count = 0
-    for path in Path(job_dir).rglob("*"):
-        if path.is_file():
-            key = f"{JOB_NAME}/{path.relative_to(job_dir)}"
-            s3.upload_file(str(path), bucket, key)
-            count += 1
-    print(f"Uploaded {count} files to s3://{bucket}/{JOB_NAME}/", file=sys.stderr)
-
-
 from harbor.cli.main import app
-
-try:
-    app()
-finally:
-    # app() raises SystemExit (typer); upload runs regardless of exit code.
-    _upload_results_to_s3()
+app()
