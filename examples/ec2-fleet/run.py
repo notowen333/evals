@@ -36,12 +36,13 @@ except Exception as _e:
     print(f"Could not raise FD limit: {_e}", file=sys.stderr)
 
 # --- Orphan cleanup ---
-# If the orchestrator dies, terminate all fleet instances so we don't leak EC2s.
+# Scoped to THIS job's instances only (by tag), so concurrent runs don't kill each other.
 KEY_NAME = os.environ.get("KEY_NAME", "harbor-benchmark")
+JOB_TAG = os.environ.get("JOB_NAME", "ec2-fleet")
 
 
 def _terminate_fleet():
-    """Terminate all running/pending instances with our key pair."""
+    """Terminate running/pending instances tagged with this job's name."""
     try:
         import boto3
         ec2 = boto3.client("ec2", region_name=os.environ.get("AWS_REGION", "us-east-1"))
@@ -49,12 +50,13 @@ def _terminate_fleet():
             Filters=[
                 {"Name": "instance-state-name", "Values": ["running", "pending"]},
                 {"Name": "key-name", "Values": [KEY_NAME]},
+                {"Name": "tag:harbor:job", "Values": [JOB_TAG]},
             ]
         )
         ids = [i["InstanceId"] for r in resp["Reservations"] for i in r["Instances"]]
         if ids:
             ec2.terminate_instances(InstanceIds=ids)
-            print(f"\nCleanup: terminated {len(ids)} orphaned fleet instances.", file=sys.stderr)
+            print(f"\nCleanup: terminated {len(ids)} instances for job '{JOB_TAG}'.", file=sys.stderr)
     except Exception as e:
         print(f"\nCleanup failed: {e}", file=sys.stderr)
 
@@ -154,6 +156,7 @@ sys.argv = [
     "--ek", f"subnet_id={SUBNET}",
     "--ek", "ssh_user=ubuntu",
     "--ek", "bootstrap_docker=true",
+    "--ek", f'tags={{"harbor:job":"{JOB_TAG}"}}',
     *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
     *[arg for k, v in _aws_creds.items() for arg in ("--ae", f"{k}={v}")],
     *(["--ae", f"STRANDS_MODEL={os.environ['STRANDS_MODEL']}"] if os.environ.get("STRANDS_MODEL") else []),
