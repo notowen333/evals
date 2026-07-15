@@ -53,16 +53,8 @@ case "$MODEL" in
     ;;
 esac
 
-# --- Resolve instance type based on dataset ---
-case "$DATASET" in
-  terminal-bench/terminal-bench-2-1|tb21)
-    DATASET="terminal-bench/terminal-bench-2-1"
-    INSTANCE_TYPE="m7i.xlarge"
-    ;;
-  *)
-    INSTANCE_TYPE="m7i.large"
-    ;;
-esac
+# --- Instance type (always xlarge to handle any task's resource requirements) ---
+INSTANCE_TYPE="m7i.xlarge"
 
 # --- Build job name and paths ---
 DATASET_SLUG="${DATASET//\//-}"
