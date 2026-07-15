@@ -21,20 +21,16 @@ DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 CONCURRENCY="${4:-500}"
 
 # --- Resolve agent path ---
-case "$AGENT" in
-  stan_0.1.1|stan)
-    AGENT_PATH="/home/ubuntu/stan_agent"
-    AGENT_MODULE="agent:MyAgent"
-    ;;
-  trivial|minimal)
-    AGENT_PATH="/home/ubuntu/evals/examples/benchmark_agent"
-    AGENT_MODULE="agent:MyAgent"
-    ;;
-  *)
-    echo "Unknown agent: $AGENT. Options: stan_0.1.1, trivial" >&2
-    exit 1
-    ;;
-esac
+# Convention: agents live at /home/ubuntu/agents/<name>/ with agent.py exporting MyAgent.
+AGENTS_DIR="/home/ubuntu/agents"
+AGENT_PATH="${AGENTS_DIR}/${AGENT}"
+AGENT_MODULE="agent:MyAgent"
+
+if [ ! -d "$AGENT_PATH" ]; then
+  echo "Agent not found: $AGENT_PATH" >&2
+  echo "Available agents: $(ls "$AGENTS_DIR" 2>/dev/null | tr '\n' ' ')" >&2
+  exit 1
+fi
 
 # --- Resolve model ID ---
 case "$MODEL" in
