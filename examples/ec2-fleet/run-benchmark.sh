@@ -41,7 +41,7 @@ case "$MODEL" in
     MODEL_ID="us.anthropic.claude-opus-4-8"
     ;;
   sonnet-5|sonnet5)
-    MODEL_ID="us.anthropic.claude-sonnet-5-v1"
+    MODEL_ID="us.anthropic.claude-sonnet-5"
     ;;
   *)
     # Allow passing raw model IDs
