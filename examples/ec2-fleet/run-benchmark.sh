@@ -76,6 +76,10 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
 
+# Ensure the Harbor fork is installed (pip install -e .[harbor] can overwrite it
+# with stock PyPI harbor since pyproject.toml lists harbor>=0.17.1 as a dep).
+pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
+
 rm -rf "$OUTPUT_DIR"
 
 # --- Run ---
