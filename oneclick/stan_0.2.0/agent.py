@@ -6,8 +6,6 @@ from pathlib import Path
 
 from strands import Agent
 from strands.sandbox.docker import DockerSandbox
-from strands.vended_tools.bash import make_bash
-from strands.vended_tools.file_editor import make_file_editor
 from strands_stan import harness_agent
 
 _MODEL_CONFIG_PATH = Path(__file__).parent / "model_config.json"
@@ -35,9 +33,5 @@ class MyAgent:
         )
         return harness_agent(
             model=_resolve_model_name(os.environ.get("STRANDS_MODEL")),
-            builtin_tools=[],
-            tools=[
-                make_bash(sandbox=sandbox),
-                make_file_editor(sandbox=sandbox),
-            ],
+            sandbox=sandbox,
         )

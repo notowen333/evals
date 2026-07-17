@@ -9,7 +9,7 @@ strands-agent
 ```
 
 Do not register or invoke it as `strands-stan` or `strand-agent`. The directory
-name (`strands_stan_v1.1`) and Python package name (`strands_stan`) are
+name (`stan_0.2.0`) and Python package name (`strands_stan`) are
 implementation names; they do not determine the OneClick agent ID.
 
 The task executor looks up `harbor_command` in Agents AppConfig using the agent
@@ -43,7 +43,7 @@ Verify the synchronized source is ignored before committing:
 
 ```bash
 git check-ignore -v \
-  oneclick/strands_stan_v1.1/strands_stan/agent.py
+  oneclick/stan_0.2.0/strands_stan/agent.py
 ```
 
 The source must be included in the private runtime image so the agent can run.
@@ -57,18 +57,18 @@ Use a new `vX.Y.Z` version for each release. From the repository root:
 
 ```bash
 # Build locally without publishing
-./oneclick/strands_stan_v1.1/build-and-push.sh v0.1.1
+./oneclick/stan_0.2.0/build-and-push.sh v0.2.0
 
 # Build, push to gamma, and register the agent version
-./oneclick/strands_stan_v1.1/build-and-push.sh publish gamma v0.1.1
+./oneclick/stan_0.2.0/build-and-push.sh publish gamma v0.2.0
 ```
 
-For `v0.1.1`, the expected identifiers are:
+For `v0.2.0`, the expected identifiers are:
 
 ```text
 agentId:        strands-agent
-agentVersionId: v0.1.1
-ECR tag:        strands-agent-v0.1.1
+agentVersionId: v0.2.0
+ECR tag:        strands-agent-v0.2.0
 ```
 
 The publish script synchronizes the private source, builds the `linux/amd64`

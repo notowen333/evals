@@ -24,7 +24,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | Options | Default |
 |-----|---------|---------|
-| `agent` | `stan_0.1.1`, `trivial` | required |
+| `agent` | `stan_0.2.0`, `benchmark_agent`, or any dir under `examples/` | required |
 | `model` | `sonnet-4.6`, `opus-4.8`, `sonnet-5`, or a raw Bedrock model ID | required |
 | `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia`) | required |
 | `concurrency` | Number of parallel EC2 instances | 500 |
@@ -33,13 +33,13 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 ```bash
 # SWE-bench Verified with Stan on Sonnet 4.6
-run-benchmark.sh stan_0.1.1 sonnet-4.6 swe-bench/swe-bench-verified
+run-benchmark.sh stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified
 
-# Terminal-Bench 2.1 with the trivial agent on Opus
-run-benchmark.sh trivial opus-4.8 terminal-bench/terminal-bench-2-1 89
+# Terminal-Bench 2.1 with the benchmark agent on Opus
+run-benchmark.sh benchmark_agent opus-4.8 terminal-bench/terminal-bench-2-1 89
 
 # GAIA with Stan on Sonnet 4.6
-run-benchmark.sh stan_0.1.1 sonnet-4.6 gaia
+run-benchmark.sh stan_0.2.0 sonnet-4.6 gaia
 ```
 
 ## Results
@@ -86,7 +86,7 @@ Before first use, ensure the orchestrator has:
 - [x] Latest code: `git pull origin harbor-adapter`
 - [x] venv installed: `source .venv/bin/activate && pip install -e .[harbor]`
 - [x] SSH key at `/root/.ssh/harbor-benchmark.pem`
-- [x] Stan agent at `/home/ubuntu/stan_agent/` (scp'd, not in git)
+- [x] Stan agents at `examples/stan_<version>/` (in-repo, synced from `stan/` via `sync-source.sh`)
 - [x] Docker network pool expanded (`/etc/docker/daemon.json` — only for local Docker runs)
 
 ## Known Limitations

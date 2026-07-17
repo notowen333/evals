@@ -77,6 +77,7 @@ atexit.register(_terminate_fleet)
 # Config — edit these or set via environment
 AGENT_PATH = os.environ.get("AGENT_PATH", "./examples/benchmark_agent")
 AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
+AGENT_DEPS = os.environ.get("AGENT_DEPS")  # optional: override installed deps (default: strands-agents-tools)
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
 CONCURRENCY = os.environ.get("CONCURRENCY", "500")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE", "m7i.large")
@@ -126,6 +127,7 @@ sys.argv = [
     "-a", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
     "--ak", f"agent_path={AGENT_PATH}",
     "--ak", f"agent_module={AGENT_MODULE}",
+    *(["--ak", f"agent_deps={AGENT_DEPS}"] if AGENT_DEPS else []),
     "-d", DATASET,
     "-n", CONCURRENCY,
     *(["-l", N_TASKS] if N_TASKS else []),

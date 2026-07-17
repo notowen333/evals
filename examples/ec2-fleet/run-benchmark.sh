@@ -5,10 +5,10 @@
 #   run-benchmark <agent> <model> <dataset> [concurrency]
 #
 # Examples:
-#   run-benchmark stan_0.1.1 sonnet-4.6 terminal-bench/terminal-bench-2-1
-#   run-benchmark stan_0.1.1 sonnet-4.6 swe-bench/swe-bench-verified 500
-#   run-benchmark stan_0.1.1 opus-4.8 gaia
-#   run-benchmark trivial sonnet-4.6 terminal-bench/terminal-bench-2-1 89
+#   run-benchmark stan_0.2.0 sonnet-4.6 terminal-bench/terminal-bench-2-1
+#   run-benchmark stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified 500
+#   run-benchmark stan_0.2.0 opus-4.8 gaia
+#   run-benchmark benchmark_agent sonnet-4.6 terminal-bench/terminal-bench-2-1 89
 #
 # Results upload to: s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 # Local results at:  jobs/<agent>--<model>--<dataset-slug>/
@@ -21,14 +21,18 @@ DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 CONCURRENCY="${4:-500}"
 
 # --- Resolve agent path ---
-# Convention: agents live at /home/ubuntu/agents/<name>/ with agent.py exporting MyAgent.
-AGENTS_DIR="/home/ubuntu/agents"
-AGENT_PATH="${AGENTS_DIR}/${AGENT}"
+# In-repo agents live at examples/<name>/ with agent.py exporting MyAgent.
+# Falls back to /home/ubuntu/agents/<name>/ for legacy scp'd agents.
+EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AGENT_MODULE="agent:MyAgent"
 
-if [ ! -d "$AGENT_PATH" ]; then
-  echo "Agent not found: $AGENT_PATH" >&2
-  echo "Available agents: $(ls "$AGENTS_DIR" 2>/dev/null | tr '\n' ' ')" >&2
+if [ -d "${EVALS_DIR}/examples/${AGENT}" ]; then
+  AGENT_PATH="${EVALS_DIR}/examples/${AGENT}"
+elif [ -d "/home/ubuntu/agents/${AGENT}" ]; then
+  AGENT_PATH="/home/ubuntu/agents/${AGENT}"
+else
+  echo "Agent not found in examples/${AGENT} or /home/ubuntu/agents/${AGENT}" >&2
+  echo "Available in-repo: $(ls "${EVALS_DIR}/examples/" 2>/dev/null | tr '\n' ' ')" >&2
   exit 1
 fi
 
@@ -36,6 +40,9 @@ fi
 case "$MODEL" in
   sonnet-4.6|sonnet)
     MODEL_ID="us.anthropic.claude-sonnet-4-6"
+    ;;
+  opus-4.6)
+    MODEL_ID="global.anthropic.claude-opus-4-6-v1"
     ;;
   opus-4.8|opus)
     MODEL_ID="us.anthropic.claude-opus-4-8"
@@ -75,6 +82,16 @@ export HOME=/root
 export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
+
+# Sync Stan source if the agent has a sync script
+if [ -x "${AGENT_PATH}/sync-source.sh" ]; then
+  "${AGENT_PATH}/sync-source.sh"
+fi
+
+# Stan agents only need strands-agents (they bundle their own tools/plugins)
+if [[ "$AGENT" == stan_* ]]; then
+  export AGENT_DEPS="strands-agents>=1.45.0"
+fi
 
 # Ensure the Harbor fork is installed (pip install -e .[harbor] can overwrite it
 # with stock PyPI harbor since pyproject.toml lists harbor>=0.17.1 as a dep).

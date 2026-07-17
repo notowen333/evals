@@ -9,16 +9,16 @@ The Stan checkout is ignored at `stan/`. Synchronize its Python source into this
 package before a direct Docker build; `build-and-push.sh` does this automatically.
 
 ```bash
-./oneclick/strands_stan_v1.1/sync-source.sh
-./oneclick/strands_stan_v1.1/build-and-push.sh v0.1.0
-./oneclick/strands_stan_v1.1/build-and-push.sh publish gamma v0.1.0
+./oneclick/stan_0.2.0/sync-source.sh
+./oneclick/stan_0.2.0/build-and-push.sh v0.2.0
+./oneclick/stan_0.2.0/build-and-push.sh publish gamma v0.2.0
 ```
 
 `STAN_PY_SOURCE` can override the default source location
 `stan/stan-py/src/strands_stan`.
 
-Publishing `v0.1.0` registers `agentId=strands-agent` and
-`agentVersionId=v0.1.0`, backed by ECR tag `strands-agent-v0.1.0`.
+Publishing `v0.2.0` registers `agentId=strands-agent` and
+`agentVersionId=v0.2.0`, backed by ECR tag `strands-agent-v0.2.0`.
 
 ## OneClick registration
 
