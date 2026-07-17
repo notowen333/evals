@@ -20,7 +20,6 @@ import atexit
 import os
 import signal
 import sys
-from concurrent.futures import ThreadPoolExecutor
 
 # --- File descriptor limit ---
 # Each concurrent SSH session to a fleet node uses several FDs. At 500 nodes the
@@ -71,24 +70,9 @@ signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 atexit.register(_terminate_fleet)
 
-# --- Thread pool patch ---
-# Harbor's EC2 environment uses asyncio.to_thread() for blocking boto3 waiter
-# calls. The default thread pool (14 workers on Mac, 32 max) limits how many
-# instances can boot simultaneously. This patch lifts that to 512.
-_original_run = asyncio.run
-
-
-def _patched_run(coro, **kwargs):
-    loop = asyncio.new_event_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=512))
-    try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-asyncio.run = _patched_run
+# Thread pool scaling is handled natively by the Harbor fork (strands-fork)
+# in cli/utils.py — it sets max_workers based on n_concurrent_trials.
+# No monkeypatch needed.
 
 # Config — edit these or set via environment
 AGENT_PATH = os.environ.get("AGENT_PATH", "./examples/benchmark_agent")
