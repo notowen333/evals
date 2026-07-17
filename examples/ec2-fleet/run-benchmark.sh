@@ -50,7 +50,7 @@ case "$MODEL" in
 esac
 
 # --- Instance type (always xlarge to handle any task's resource requirements) ---
-INSTANCE_TYPE="m7i.xlarge"
+INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 
 # --- Build job name and paths ---
 DATASET_SLUG="${DATASET//\//-}"
