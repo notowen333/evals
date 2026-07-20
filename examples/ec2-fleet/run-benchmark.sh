@@ -112,6 +112,7 @@ export BENCHMARK_S3_BUCKET=strands-benchmark-results
 export SSH_KEY_PATH=/root/.ssh/harbor-benchmark.pem
 export AGENT_PATH="$AGENT_PATH"
 export AGENT_MODULE="$AGENT_MODULE"
+export AGENT_NAME="$AGENT"
 export STRANDS_MODEL="$MODEL_ID"
 
 python examples/ec2-fleet/run.py 2>&1 | tee "$LOG_FILE"

@@ -78,6 +78,7 @@ atexit.register(_terminate_fleet)
 AGENT_PATH = os.environ.get("AGENT_PATH", "./examples/benchmark_agent")
 AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
 AGENT_DEPS = os.environ.get("AGENT_DEPS")  # optional: override installed deps (default: strands-agents-tools)
+AGENT_NAME = os.environ.get("AGENT_NAME")  # display name for the viewer (e.g. stan_0.2.0)
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
 CONCURRENCY = os.environ.get("CONCURRENCY", "500")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE", "m7i.large")
@@ -124,7 +125,8 @@ _aws_creds = {} if IAM_INSTANCE_PROFILE else _resolve_aws_creds()
 
 sys.argv = [
     "harbor", "run",
-    "-a", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
+    "-a", AGENT_NAME or "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
+    *(["--agent-import-path", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"] if AGENT_NAME else []),
     "--ak", f"agent_path={AGENT_PATH}",
     "--ak", f"agent_module={AGENT_MODULE}",
     *(["--ak", f"agent_deps={AGENT_DEPS}"] if AGENT_DEPS else []),
