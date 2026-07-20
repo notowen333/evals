@@ -124,6 +124,11 @@ export STRANDS_MODEL="$MODEL_ID"
 python examples/ec2-fleet/run.py 2>&1 | tee "$LOG_FILE"
 RUN_EXIT=$?
 
+# Patch config.agent.name from the import path to the friendly agent name.
+# Harbor writes the import path as the name; the viewer uses this field for display.
+find "${OUTPUT_DIR}/${JOB_NAME}" -name config.json \
+  -exec sed -i "s|\"name\": \"strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent\"|\"name\": \"${AGENT}\"|g" {} +
+
 # --- Upload results to S3 (always runs, even on partial failure) ---
 echo ""
 echo "=== Uploading results to S3 ==="
