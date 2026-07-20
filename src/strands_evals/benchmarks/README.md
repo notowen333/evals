@@ -87,7 +87,8 @@ After a run, `./jobs/<name>/` contains per-trial:
     conversation.json    # full message history
     conversation.jsonl   # incremental (survives timeouts)
     trajectory.json      # ATIF v1.7 (for harbor analyze)
-    strands.log          # agent stdout
+    command-0/
+      stdout.txt         # agent stdout (stock Harbor viewer layout)
     source/              # copy of your agent code
   verifier/
     reward.txt           # 0.0 or 1.0

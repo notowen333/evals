@@ -83,13 +83,13 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
 
-# Sync Stan source if the agent has a sync script
-if [ -x "${AGENT_PATH}/sync-source.sh" ]; then
-  "${AGENT_PATH}/sync-source.sh"
-fi
-
-# Stan agents only need strands-agents (they bundle their own tools/plugins)
+# Stan agents: install strands_stan from private repo via Secrets Manager PAT
 if [[ "$AGENT" == stan_* ]]; then
+  STAN_PAT=$(aws secretsmanager get-secret-value \
+    --secret-id "arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx" \
+    --region us-east-1 \
+    --query 'SecretString' --output text | python3 -c "import sys,json;print(json.loads(sys.stdin.read())['stan_pat'])")
+  pip install -q "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
   export AGENT_DEPS="strands-agents>=1.45.0"
 fi
 

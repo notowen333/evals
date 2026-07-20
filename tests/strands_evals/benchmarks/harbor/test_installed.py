@@ -71,6 +71,8 @@ async def test_run_execs_runner_with_instruction(tmp_path):
     run_cmd = next(c for c in commands if "runner.py" in c)
     assert "--agent" in run_cmd
     assert "my_agent:agent" in run_cmd
+    assert "mkdir -p /logs/agent/command-0" in run_cmd
+    assert "tee /logs/agent/command-0/stdout.txt" in run_cmd
 
 
 async def test_run_forwards_aws_creds(tmp_path):

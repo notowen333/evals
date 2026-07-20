@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 _AGENT_INSTALL_DIR = "/installed-agent/user"
 _RESULT_PATH = str(EnvironmentPaths.agent_dir / "result.json")
-_LOG_PATH = str(EnvironmentPaths.agent_dir / "strands.log")
+_COMMAND_LOG_DIR = str(EnvironmentPaths.agent_dir / "command-0")
+_LOG_PATH = str(EnvironmentPaths.agent_dir / "command-0" / "stdout.txt")
 
 
 class BaseStrandsInstalledAgent(BaseInstalledAgent):
@@ -125,7 +126,7 @@ class BaseStrandsInstalledAgent(BaseInstalledAgent):
         env, instruction = self._resolve_run_env(instruction)
 
         cli_flags = self.build_cli_flags()
-        parts = self._build_run_command(cli_flags)
+        parts = [f"mkdir -p {_COMMAND_LOG_DIR} &&", *self._build_run_command(cli_flags)]
         command = " ".join(parts)
 
         try:

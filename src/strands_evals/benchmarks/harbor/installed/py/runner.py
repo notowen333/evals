@@ -174,7 +174,7 @@ def main() -> int:
         return 1
 
     # Stream messages to a JSONL file as they happen. This survives hard kills
-    # (same principle as `tee` for strands.log) — even if the runner is SIGKILLed,
+    # (same principle as `tee` for the Harbor command log) — even if the runner is SIGKILLed,
     # messages up to the last completed write are preserved.
     all_messages: list = []
     conversation_path = output_path.parent / "conversation.jsonl"
