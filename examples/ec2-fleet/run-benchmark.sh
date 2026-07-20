@@ -83,7 +83,7 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
 
-# Stan agents: install strands_stan from private repo via Secrets Manager PAT
+# Stan agents: install strands_stan from private repo and bundle it for container upload
 if [[ "$AGENT" == stan_* ]]; then
   STAN_PAT=$(python3 -c "
 import json, boto3
@@ -91,7 +91,13 @@ client = boto3.client('secretsmanager', region_name='us-east-1')
 secret = client.get_secret_value(SecretId='arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx')
 print(json.loads(secret['SecretString'])['stan_pat'])
 ")
-  pip install -q "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
+  pip install -q --force-reinstall --no-deps "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
+
+  # Bundle strands_stan into the agent dir so it gets uploaded to fleet containers
+  STAN_SRC=$(python3 -c "import strands_stan, pathlib; print(pathlib.Path(strands_stan.__file__).parent)")
+  rm -rf "${AGENT_PATH}/strands_stan"
+  cp -r "${STAN_SRC}" "${AGENT_PATH}/strands_stan"
+
   export AGENT_DEPS="strands-agents>=1.45.0"
 fi
 
