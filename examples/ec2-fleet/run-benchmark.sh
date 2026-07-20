@@ -103,7 +103,13 @@ fi
   pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
 ) 200>/tmp/harbor-install.lock
 
-rm -rf "${OUTPUT_DIR}/${JOB_NAME}"
+# Archive previous run if it exists (NEVER delete results)
+if [ -d "${OUTPUT_DIR}/${JOB_NAME}" ]; then
+  mkdir -p "${OUTPUT_DIR}/archived"
+  ARCHIVE_NAME="${JOB_NAME}--$(date -u +%Y%m%dT%H%M%S)"
+  mv "${OUTPUT_DIR}/${JOB_NAME}" "${OUTPUT_DIR}/archived/${ARCHIVE_NAME}"
+  echo "Archived previous run to ${OUTPUT_DIR}/archived/${ARCHIVE_NAME}"
+fi
 
 # --- Run ---
 export AWS_REGION=us-east-1
