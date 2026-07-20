@@ -85,10 +85,12 @@ source .venv/bin/activate
 
 # Stan agents: install strands_stan from private repo via Secrets Manager PAT
 if [[ "$AGENT" == stan_* ]]; then
-  STAN_PAT=$(aws secretsmanager get-secret-value \
-    --secret-id "arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx" \
-    --region us-east-1 \
-    --query 'SecretString' --output text | python3 -c "import sys,json;print(json.loads(sys.stdin.read())['stan_pat'])")
+  STAN_PAT=$(python3 -c "
+import json, boto3
+client = boto3.client('secretsmanager', region_name='us-east-1')
+secret = client.get_secret_value(SecretId='arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx')
+print(json.loads(secret['SecretString'])['stan_pat'])
+")
   pip install -q "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
   export AGENT_DEPS="strands-agents>=1.45.0"
 fi
