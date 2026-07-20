@@ -48,7 +48,7 @@ case "$MODEL" in
     MODEL_ID="us.anthropic.claude-opus-4-8"
     ;;
   sonnet-5|sonnet5)
-    MODEL_ID="us.anthropic.claude-sonnet-5"
+    MODEL_ID="global.anthropic.claude-sonnet-5"
     ;;
   *)
     # Allow passing raw model IDs
@@ -61,7 +61,7 @@ INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 
 # --- Build job name and paths ---
 DATASET_SLUG="${DATASET//\//-}"
-JOB_NAME="${AGENT}--${MODEL}--${DATASET_SLUG}"
+JOB_NAME="${AGENT}${VERSION_TAG:+@${VERSION_TAG}}--${MODEL}--${DATASET_SLUG}"
 OUTPUT_DIR="jobs"
 S3_PREFIX="${AGENT}/${MODEL}/${DATASET_SLUG}"
 LOG_FILE="/home/ubuntu/benchmark-${JOB_NAME}.log"
