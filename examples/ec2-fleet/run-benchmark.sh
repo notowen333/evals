@@ -97,7 +97,11 @@ fi
 
 # Ensure the Harbor fork is installed (pip install -e .[harbor] can overwrite it
 # with stock PyPI harbor since pyproject.toml lists harbor>=0.17.1 as a dep).
-pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
+# Use a lockfile to avoid races when multiple benchmarks launch concurrently.
+(
+  flock -x 200
+  pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
+) 200>/tmp/harbor-install.lock
 
 rm -rf "${OUTPUT_DIR}/${JOB_NAME}"
 

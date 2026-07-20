@@ -125,8 +125,8 @@ _aws_creds = {} if IAM_INSTANCE_PROFILE else _resolve_aws_creds()
 
 sys.argv = [
     "harbor", "run",
-    "-a", AGENT_NAME or "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
-    *(["--agent-import-path", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"] if AGENT_NAME else []),
+    "-a", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
+    *(["--ak", f"display_name={AGENT_NAME}"] if AGENT_NAME else []),
     "--ak", f"agent_path={AGENT_PATH}",
     "--ak", f"agent_module={AGENT_MODULE}",
     *(["--ak", f"agent_deps={AGENT_DEPS}"] if AGENT_DEPS else []),

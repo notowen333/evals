@@ -48,6 +48,7 @@ class StrandsInstalledPyAgent(BaseStrandsInstalledAgent):
         agent_deps: str = "strands-agents-tools",
         strands_version: str = ">=1.45.0",
         unpublished_strands_ref: str | None = None,
+        display_name: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir, **kwargs)
@@ -56,11 +57,11 @@ class StrandsInstalledPyAgent(BaseStrandsInstalledAgent):
         self._agent_deps = agent_deps or ""
         self._strands_version = strands_version
         self._unpublished_strands_ref = unpublished_strands_ref
+        self._display_name = display_name
 
-    @staticmethod
     @override
-    def name() -> str:
-        return "strands-installed"
+    def name(self) -> str:
+        return self._display_name or "strands-installed"
 
     @override
     def get_version_command(self) -> str | None:
