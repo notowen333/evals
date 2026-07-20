@@ -42,7 +42,32 @@ run-benchmark.sh benchmark_agent opus-4.8 terminal-bench/terminal-bench-2-1 89
 run-benchmark.sh stan_0.2.0 sonnet-4.6 gaia
 ```
 
-## Results
+## Job naming and results
+
+Job names are auto-generated as `<agent>--<model>--<dataset-slug>`. This produces
+a flat directory under `jobs/` that the Harbor viewer can scan directly:
+
+```
+jobs/
+├── stan_0.2.0--sonnet-4.6--terminal-bench-terminal-bench-2-1/
+│   ├── config.json       ← Harbor job config (agent, env, dataset)
+│   ├── result.json       ← Aggregate metrics (started_at, stats, evals)
+│   ├── lock.json
+│   ├── job.log
+│   └── <trial-id>/      ← One per task (contains agent logs, trajectory, etc.)
+├── stan_0.2.0--opus-4.8--medagentbench/
+│   └── ...
+```
+
+**Important:** The job directory must be flat (`jobs/<name>/<trials>`), NOT
+double-nested (`jobs/<name>/<name>/<trials>`). The `run-benchmark.sh` script
+sets `-o jobs` and `--job-name <name>` to produce the correct structure. If you
+see `started_at: null` or `n_total_trials: 1` in the viewer, the directory is
+double-nested and needs to be flattened.
+
+The `result.json` contains `started_at`/`finished_at` timestamps — these are
+populated by Harbor automatically when the run begins and ends. The viewer uses
+these to show dates.
 
 Results upload to S3 at:
 ```
@@ -52,6 +77,21 @@ s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 Local results on the orchestrator at:
 ```
 /home/ubuntu/evals/jobs/<agent>--<model>--<dataset-slug>/
+```
+
+### Viewing results
+
+Start the Harbor viewer and access via SSM port forwarding:
+
+```bash
+# On the orchestrator (already running as a daemon):
+harbor view jobs/ --port 8081 --host 0.0.0.0 --jobs --dev
+
+# From your machine:
+aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["5173"],"localPortNumber":["5173"]}' --region us-east-1 &
+aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8081"],"localPortNumber":["8081"]}' --region us-east-1
+
+# Then open http://localhost:5173
 ```
 
 ## Monitoring

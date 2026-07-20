@@ -62,7 +62,7 @@ INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 # --- Build job name and paths ---
 DATASET_SLUG="${DATASET//\//-}"
 JOB_NAME="${AGENT}--${MODEL}--${DATASET_SLUG}"
-OUTPUT_DIR="jobs/${JOB_NAME}"
+OUTPUT_DIR="jobs"
 S3_PREFIX="${AGENT}/${MODEL}/${DATASET_SLUG}"
 LOG_FILE="/home/ubuntu/benchmark-${JOB_NAME}.log"
 
@@ -97,7 +97,7 @@ fi
 # with stock PyPI harbor since pyproject.toml lists harbor>=0.17.1 as a dep).
 pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
 
-rm -rf "$OUTPUT_DIR"
+rm -rf "${OUTPUT_DIR}/${JOB_NAME}"
 
 # --- Run ---
 export AWS_REGION=us-east-1
