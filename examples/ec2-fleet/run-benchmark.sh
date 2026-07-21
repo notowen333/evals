@@ -18,7 +18,15 @@ set -euo pipefail
 AGENT="${1:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 MODEL="${2:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
-CONCURRENCY="${4:-500}"
+
+# Auto-resolve concurrency from datasets.csv if not explicitly passed
+if [ -n "${4:-}" ]; then
+  CONCURRENCY="$4"
+else
+  SCRIPT_DIR_CSV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  CONCURRENCY=$(grep "^${DATASET}," "${SCRIPT_DIR_CSV}/datasets.csv" 2>/dev/null | cut -d, -f3)
+  CONCURRENCY="${CONCURRENCY:-500}"
+fi
 
 # --- Resolve agent path ---
 # In-repo agents live at examples/<name>/ with agent.py exporting MyAgent.
