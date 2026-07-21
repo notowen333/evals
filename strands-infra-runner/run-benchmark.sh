@@ -122,7 +122,11 @@ else:
   rm -rf "${AGENT_PATH}/strands_stan"
   cp -r "${STAN_SRC}" "${AGENT_PATH}/strands_stan"
 
-  export AGENT_DEPS="strands-agents>=1.45.0"
+  if [[ "$MODEL_ID" == openai.* ]]; then
+    export AGENT_DEPS="strands-agents[openai]>=1.45.0"
+  else
+    export AGENT_DEPS="strands-agents>=1.45.0"
+  fi
 fi
 
 # Ensure the Harbor fork is installed (pip install -e .[harbor] can overwrite it
