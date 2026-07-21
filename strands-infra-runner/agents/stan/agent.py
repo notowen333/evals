@@ -11,11 +11,13 @@ def _resolve_model():
     if not model_id:
         return None
     if model_id.startswith("openai."):
-        from strands.models.openai import OpenAIModel
-        return OpenAIModel(
-            model_id=model_id,
-            bedrock_mantle_config={"region": os.environ.get("AWS_REGION", "us-east-1")},
-        )
+        mantle_config = {"region": os.environ.get("AWS_REGION", "us-east-1")}
+        if "gpt-5" in model_id:
+            from strands.models.openai_responses import OpenAIResponsesModel
+            return OpenAIResponsesModel(model_id=model_id, bedrock_mantle_config=mantle_config)
+        else:
+            from strands.models.openai import OpenAIModel
+            return OpenAIModel(model_id=model_id, bedrock_mantle_config=mantle_config)
     return model_id
 
 
