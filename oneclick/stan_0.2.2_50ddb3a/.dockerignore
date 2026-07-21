@@ -1,0 +1,10 @@
+Dockerfile
+.dockerignore
+build-and-push.sh
+sync-source.sh
+README.md
+PUBLISHING.md
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
