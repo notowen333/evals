@@ -19,13 +19,32 @@ AGENT="${1:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 MODEL="${2:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 
-# Auto-resolve concurrency from datasets.csv if not explicitly passed
+# Auto-resolve concurrency from known dataset sizes if not explicitly passed
 if [ -n "${4:-}" ]; then
   CONCURRENCY="$4"
 else
-  SCRIPT_DIR_CSV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  CONCURRENCY=$(grep "^${DATASET}," "${SCRIPT_DIR_CSV}/datasets.csv" 2>/dev/null | cut -d, -f3)
-  CONCURRENCY="${CONCURRENCY:-500}"
+  case "$DATASET" in
+    swe-bench/swe-bench-verified)       CONCURRENCY=500 ;;
+    terminal-bench/terminal-bench-2-1)  CONCURRENCY=89 ;;
+    terminal-bench/terminal-bench-3)    CONCURRENCY=75 ;;
+    terminal-bench-pro/terminal-bench-pro) CONCURRENCY=200 ;;
+    gaia/gaia)                          CONCURRENCY=165 ;;
+    stanford/medagentbench)             CONCURRENCY=300 ;;
+    xlang-ai/osworld-verified)          CONCURRENCY=361 ;;
+    theagentcompany/theagentcompany)    CONCURRENCY=174 ;;
+    arcprize/arc-agi-2)                 CONCURRENCY=167 ;;
+    datacurve/deep-swe)                 CONCURRENCY=113 ;;
+    futurehouse/bixbench)               CONCURRENCY=205 ;;
+    gpqa-diamond/gpqa-diamond)          CONCURRENCY=198 ;;
+    aider/aider-polyglot)               CONCURRENCY=225 ;;
+    scale-ai/swe-bench-pro)             CONCURRENCY=500 ;;
+    openai/swe-lancer-diamond-all)      CONCURRENCY=463 ;;
+    bigcode/bigcodebench-hard-complete) CONCURRENCY=145 ;;
+    scienceagentbench/scienceagentbench) CONCURRENCY=102 ;;
+    usaco/usaco)                        CONCURRENCY=304 ;;
+    algotune/algotune)                  CONCURRENCY=154 ;;
+    *)                                  CONCURRENCY=500 ;;
+  esac
 fi
 
 # --- Resolve agent path ---
