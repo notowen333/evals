@@ -19,7 +19,9 @@ AGENT="${1:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 MODEL="${2:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 
-# Auto-resolve concurrency from datasets.json (task count, capped at 500)
+EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Auto-resolve concurrency from datasets.json (task count, capped at 2000)
 if [ -n "${4:-}" ]; then
   CONCURRENCY="$4"
 else
@@ -32,7 +34,6 @@ print(min(tasks, 2000))
 fi
 
 # --- Resolve agent path ---
-EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENTS_DIR="${EVALS_DIR}/strands-infra-runner/agents"
 AGENT_MODULE="agent:MyAgent"
 
