@@ -1,0 +1,185 @@
+{
+    "sonnet_v3.5_temp1": {
+        "model_id": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "region_name": "us-east-2",
+        "streaming": true,
+        "temperature": 1
+    },
+    "sonnet_v3.5_temp0.2": {
+        "model_id": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "region_name": "us-east-2",
+        "streaming": true,
+        "temperature": 0.2
+    },
+    "sonnet_v3.5_temp0.5": {
+        "model_id": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "region_name": "us-east-2",
+        "streaming": true,
+        "temperature": 0.5
+    },
+    "sonnet_v3.5": {
+        "model_id": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "region_name": "us-east-2",
+        "streaming": true,
+        "temperature": 0
+    },
+    "sonnet_v3.7": {
+        "model_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "region_name": "us-east-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "sonnet_v4": {
+        "model_id": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "sonnet_v4.5": {
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "haiku_v4.5": {
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "opus_v4.5": {
+        "model_id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "qwen3_coder_480B": {
+        "model_id": "qwen.qwen3-coder-480b-a35b-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "max_retries": 5
+    },
+    "qwen3_coder_480B_nonstream": {
+        "model_id": "qwen.qwen3-coder-480b-a35b-v1:0",
+        "region_name": "us-west-2",
+        "streaming": false,
+        "temperature": 0,
+        "max_retries": 5
+    },
+    "qwen3_coder_30B": {
+        "model_id": "qwen.qwen3-coder-30b-a3b-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0
+    },
+    "sonnet_v4.5_temp_0.8": {
+        "model_id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0.8,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "sonnet_v4_temp_0.8": {
+        "model_id": "global.anthropic.claude-sonnet-4-20250514-v1:0",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0.8,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "openai.gpt-oss-120b-temp-08": {
+        "model_id": "openai.gpt-oss-120b-1:0",
+        "region_name": "us-west-2",
+        "streaming": false,
+        "temperature": 0.8
+    },
+    "kimi-k2-thinking": {
+        "model_id": "moonshot.kimi-k2-thinking",
+        "region_name": "us-west-2",
+        "streaming": false,
+        "temperature": 0.6
+    },
+    "minimax-m2": {
+        "model_id": "minimax.minimax-m2",
+        "region_name": "us-west-2",
+        "streaming": false,
+        "temperature": 1.0
+    },
+    "hostedvllm": {
+        "model_id": "hosted_vllm/hostedvllm",
+        "client_args": {
+            "api_key": "EMPTY",
+            "base_url": "http://localhost:8000/v1"
+        },
+        "params": {
+            "extra_body": {
+                "return_token_ids": true
+            },
+            "logprobs": true
+        }
+    },
+    "hosted_1P_model": {
+        "model_id": "qwen3-30b-prod",
+        "base_url": "https://9lejrivfti.execute-api.us-west-2.amazonaws.com/prod/v1",
+        "region_name": "us-west-2",
+        "use_sigv4": true,
+        "streaming": true,
+        "temperature": 0.0,
+        "max_retries": 5,
+        "role_arn": "arn:aws:iam::873662555042:role/model-hosting-api-ml-engineer-prod",
+        "role_session_name": "api-gateway-session"
+    },
+    "opus_v4.6": {
+        "model_id": "global.anthropic.claude-opus-4-6-v1",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "opus_v4.7": {
+        "model_id": "global.anthropic.claude-opus-4-7",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "opus_v4.8": {
+        "model_id": "global.anthropic.claude-opus-4-8",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    },
+    "sonnet_v4.6": {
+        "model_id": "global.anthropic.claude-sonnet-4-6",
+        "region_name": "us-west-2",
+        "streaming": true,
+        "temperature": 0,
+        "cache_system_prompt": "default",
+        "cache_tools": "default",
+        "cache_user_prompt": "default"
+    }
+}
