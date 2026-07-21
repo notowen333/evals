@@ -32,18 +32,15 @@ print(min(tasks, 2000))
 fi
 
 # --- Resolve agent path ---
-# In-repo agents live at examples/<name>/ with agent.py exporting MyAgent.
-# Falls back to /home/ubuntu/agents/<name>/ for legacy scp'd agents.
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AGENTS_DIR="${EVALS_DIR}/strands-infra-runner/agents"
 AGENT_MODULE="agent:MyAgent"
 
-if [ -d "${EVALS_DIR}/examples/${AGENT}" ]; then
-  AGENT_PATH="${EVALS_DIR}/examples/${AGENT}"
-elif [ -d "/home/ubuntu/agents/${AGENT}" ]; then
-  AGENT_PATH="/home/ubuntu/agents/${AGENT}"
+if [ -d "${AGENTS_DIR}/${AGENT}" ]; then
+  AGENT_PATH="${AGENTS_DIR}/${AGENT}"
 else
-  echo "Agent not found in examples/${AGENT} or /home/ubuntu/agents/${AGENT}" >&2
-  echo "Available in-repo: $(ls "${EVALS_DIR}/examples/" 2>/dev/null | tr '\n' ' ')" >&2
+  echo "Agent not found: ${AGENTS_DIR}/${AGENT}" >&2
+  echo "Available: $(ls "${AGENTS_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
   exit 1
 fi
 
@@ -95,7 +92,7 @@ cd /home/ubuntu/evals
 source .venv/bin/activate
 
 # Stan agents: install strands_stan from private repo and bundle it for container upload
-if [[ "$AGENT" == stan_* ]]; then
+if [[ "$AGENT" == stan* ]]; then
   STAN_PAT=$(python3 -c "
 import json, boto3
 client = boto3.client('secretsmanager', region_name='us-east-1')
