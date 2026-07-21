@@ -86,7 +86,7 @@ ROOT_VOLUME_GB = os.environ.get("ROOT_VOLUME_GB", "64")
 KEY_NAME = os.environ.get("KEY_NAME", "harbor-benchmark")
 SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH", os.path.expanduser("~/.ssh/harbor-benchmark.pem"))
 SECURITY_GROUP = os.environ.get("SECURITY_GROUP", "sg-0657fe39a6bbbc8f6")
-SUBNET = os.environ.get("SUBNET", "subnet-02ceab67bab36384b")
+SUBNET = os.environ.get("SUBNET")  # None = EC2 picks AZ with capacity (all subnets have public IP)
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 JOB_NAME = os.environ.get("JOB_NAME", "ec2-fleet")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "jobs/ec2-fleet")
@@ -141,7 +141,7 @@ sys.argv = [
     "--ek", f"key_name={KEY_NAME}",
     "--ek", f"ssh_key_path={SSH_KEY_PATH}",
     "--ek", f'security_group_ids=["{SECURITY_GROUP}"]',
-    "--ek", f"subnet_id={SUBNET}",
+    *(["--ek", f"subnet_id={SUBNET}"] if SUBNET else []),
     "--ek", "ssh_user=ubuntu",
     "--ek", "bootstrap_docker=true",
     "--ek", f'tags={{"harbor:job":"{JOB_TAG}"}}',
