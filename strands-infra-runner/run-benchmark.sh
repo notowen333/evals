@@ -104,6 +104,22 @@ print(json.loads(secret['SecretString'])['stan_pat'])
 ")
   pip install -q --force-reinstall --no-deps "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
 
+  # Auto-derive VERSION_TAG from installed package if not explicitly set
+  if [ -z "${VERSION_TAG:-}" ]; then
+    VERSION_TAG=$(python3 -c "
+from importlib.metadata import version
+v = version('strands-agents-stan')
+# e.g. 0.0.1.dev4+g2c58790c1 → 2c58790
+if '+g' in v:
+    print(v.split('+g')[1][:7])
+else:
+    print(v)
+")
+    echo "  Stan commit: ${VERSION_TAG} (auto-detected)"
+    # Rebuild job name with the derived tag
+    JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}"
+  fi
+
   # Bundle strands_stan into the agent dir so it gets uploaded to fleet containers
   STAN_SRC=$(python3 -c "import strands_stan, pathlib; print(pathlib.Path(strands_stan.__file__).parent)")
   rm -rf "${AGENT_PATH}/strands_stan"
