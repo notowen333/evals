@@ -27,7 +27,7 @@ else
 import json
 datasets = json.load(open('${EVALS_DIR}/strands-infra-runner/datasets.json'))
 tasks = datasets.get('${DATASET}', 500)
-print(min(tasks, 500))
+print(min(tasks, 2000))
 " 2>/dev/null || echo 500)
 fi
 
