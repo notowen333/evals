@@ -227,29 +227,78 @@ def main() -> int:
         except (ImportError, TypeError):
             pass
 
+    max_continuations = 3
+    try:
+        from strands.types.exceptions import MaxTokensReachedException
+    except ImportError:
+        MaxTokensReachedException = None
+
+    result = None
     try:
         if invoke_fn is not None:
             result = invoke_fn(agent, args.instruction, **invoke_kwargs)
         else:
             result = agent(args.instruction, **invoke_kwargs)
-    except Exception:
-        traceback.print_exc()
-        # Still try to capture partial metrics
-        metrics = getattr(agent, "event_loop_metrics", None)
-        usage = getattr(metrics, "accumulated_usage", {}) if metrics else {}
-        _write_result(
-            output_path,
-            {
-                "error": traceback.format_exc(),
-                "stop_reason": "error",
-                **_token_fields(usage),
-                "cycle_count": getattr(metrics, "cycle_count", None),
-                "accumulated_usage": dict(usage) if usage else None,
-            },
-        )
-        # Dump partial conversation even on error
-        _dump_conversation(output_path.parent, all_messages, agent)
-        return 1
+
+        # Retry on MaxTokensReachedException: the model hit its output cap mid-turn,
+        # but the conversation is intact. Continue with a nudge.
+        continuations = 0
+        while (
+            MaxTokensReachedException is not None
+            and getattr(result, "stop_reason", None) == "max_tokens"
+            and continuations < max_continuations
+        ):
+            continuations += 1
+            print(f"max_tokens reached, continuing ({continuations}/{max_continuations})...")
+            result = agent("Continue where you left off.", **invoke_kwargs)
+
+    except Exception as exc:
+        # MaxTokensReachedException may also be raised (older Strands versions)
+        if MaxTokensReachedException is not None and isinstance(exc, MaxTokensReachedException):
+            continuations = 0
+            while continuations < max_continuations:
+                continuations += 1
+                print(f"max_tokens exception, retrying ({continuations}/{max_continuations})...")
+                try:
+                    result = agent("Continue where you left off.", **invoke_kwargs)
+                    if getattr(result, "stop_reason", None) != "max_tokens":
+                        break
+                except MaxTokensReachedException:
+                    continue
+                except Exception:
+                    break
+            if result is None:
+                traceback.print_exc()
+                metrics = getattr(agent, "event_loop_metrics", None)
+                usage = getattr(metrics, "accumulated_usage", {}) if metrics else {}
+                _write_result(
+                    output_path,
+                    {
+                        "error": traceback.format_exc(),
+                        "stop_reason": "max_tokens_exhausted",
+                        **_token_fields(usage),
+                        "cycle_count": getattr(metrics, "cycle_count", None),
+                        "accumulated_usage": dict(usage) if usage else None,
+                    },
+                )
+                _dump_conversation(output_path.parent, all_messages, agent)
+                return 1
+        else:
+            traceback.print_exc()
+            metrics = getattr(agent, "event_loop_metrics", None)
+            usage = getattr(metrics, "accumulated_usage", {}) if metrics else {}
+            _write_result(
+                output_path,
+                {
+                    "error": traceback.format_exc(),
+                    "stop_reason": "error",
+                    **_token_fields(usage),
+                    "cycle_count": getattr(metrics, "cycle_count", None),
+                    "accumulated_usage": dict(usage) if usage else None,
+                },
+            )
+            _dump_conversation(output_path.parent, all_messages, agent)
+            return 1
 
     # Success — write full metrics
     metrics = agent.event_loop_metrics

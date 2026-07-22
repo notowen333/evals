@@ -100,7 +100,11 @@ class StrandsInstalledPyAgent(BaseStrandsInstalledAgent):
                 environment,
                 command=(
                     "(command -v curl >/dev/null && command -v git >/dev/null) || "
-                    "(apt-get update -qq && apt-get install -y -qq curl git)"
+                    "{ if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq curl git; "
+                    "elif command -v apk >/dev/null; then apk add --no-cache curl git; "
+                    "elif command -v dnf >/dev/null; then dnf install -y -q curl git; "
+                    "elif command -v yum >/dev/null; then yum install -y -q curl git; "
+                    "else echo 'No supported package manager found' >&2 && exit 1; fi; }"
                 ),
                 env={"DEBIAN_FRONTEND": "noninteractive"},
             )
