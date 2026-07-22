@@ -12,9 +12,14 @@ Via SSM from any machine with AWS credentials:
 aws ssm send-command \
   --instance-ids "i-0cfa2a926fa20f5f0" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["#!/bin/bash","cd /home/ubuntu/evals","nohup bash examples/ec2-fleet/run-benchmark.sh <agent> <model> <dataset> [concurrency] > /home/ubuntu/<name>.log 2>&1 < /dev/null &","disown $!","echo PID: $!"],"executionTimeout":["120"]}' \
+  --parameters '{"commands":["#!/bin/bash","cd /home/ubuntu/evals","setsid bash strands-infra-runner/run-benchmark.sh <agent> <model> <dataset> [concurrency] </dev/null >/home/ubuntu/<name>.log 2>&1 &","sleep 2","ps aux | grep run-benchmark | grep -v grep && echo LAUNCHED"]}' \
   --timeout-seconds 120
 ```
+
+**Important:** SSM `AWS-RunShellScript` kills background processes when the command
+exits. Plain `nohup &` / `disown` does NOT work. You must use `setsid` to fully
+detach the process into its own session. The `sleep 2` gives it time to start so
+you can confirm it's running.
 
 ## Arguments
 
@@ -25,7 +30,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 | Arg | Options | Default |
 |-----|---------|---------|
 | `agent` | `stan_0.2.0`, `benchmark_agent`, or any dir under `examples/` | required |
-| `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, or a raw Bedrock model ID | required |
+| `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
 | `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia`) | required |
 | `concurrency` | Number of parallel EC2 instances | 500 |
 
@@ -81,29 +86,44 @@ Local results on the orchestrator at:
 
 ### Viewing results
 
-Start the Harbor viewer and access via SSM port forwarding:
+The Harbor viewer runs on port 7842 (production mode with pre-built static assets).
+Access via SSM port forwarding:
 
 ```bash
-# On the orchestrator (already running as a daemon):
-harbor view jobs/ --port 8081 --host 0.0.0.0 --jobs --dev
-
 # From your machine:
-aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["5173"],"localPortNumber":["5173"]}' --region us-east-1 &
-aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8081"],"localPortNumber":["8081"]}' --region us-east-1
+aws ssm start-session --target i-0cfa2a926fa20f5f0 \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["7842"],"localPortNumber":["7842"]}' \
+  --region us-east-1
 
-# Then open http://localhost:5173
+# Then open http://localhost:7842
+```
+
+If the viewer needs restarting on the orchestrator:
+```bash
+harbor view jobs/ --port 7842 --host 0.0.0.0 --jobs
+```
+
+**Note:** The viewer requires pre-built frontend static assets at
+`<site-packages>/harbor/viewer/static/`. If missing (e.g. after pip reinstall),
+rebuild from the source tree:
+```bash
+cd /home/ubuntu/harbor-src/apps/viewer
+npm install @rollup/rollup-linux-x64-gnu @tailwindcss/oxide-linux-x64-gnu lightningcss-linux-x64-gnu
+npm run build
+cp -r build/client /home/ubuntu/evals/.venv/lib/python3.13/site-packages/harbor/viewer/static
 ```
 
 ## Monitoring
 
 Check if a run is alive:
 ```bash
-aws ssm send-command ... --parameters '{"commands":["pgrep -f run-benchmark && echo RUNNING || echo DONE"]}'
+aws ssm send-command ... --parameters '{"commands":["#!/bin/bash","ps aux | grep run-benchmark | grep -v grep && echo RUNNING || echo DONE"]}'
 ```
 
 Tail the log:
 ```bash
-aws ssm send-command ... --parameters '{"commands":["tail -20 /home/ubuntu/<name>.log"]}'
+aws ssm send-command ... --parameters '{"commands":["#!/bin/bash","tail -20 /home/ubuntu/benchmark-<job-name>.log"]}'
 ```
 
 Check fleet instance count:
@@ -115,10 +135,11 @@ aws ssm send-command ... --parameters '{"commands":["aws ec2 describe-instances 
 
 - **Orchestrator:** `c7i.8xlarge` (32 vCPU) — handles 500 concurrent SSH sessions
 - **Fleet instances:** `m7i.xlarge` (4 vCPU, 16GB, 64GB disk) — ephemeral, one per task
+- **AMI:** `ami-02657217947a5c8ca` (Ubuntu + Docker CE/Compose pre-baked, no bootstrap needed)
 - **SSH key:** `harbor-benchmark` (private key at `/root/.ssh/harbor-benchmark.pem` on orchestrator)
 - **IAM:** Fleet nodes use `StrandsBenchmarkHarborNodeRole` instance profile (Bedrock access)
 - **Region:** us-east-1
-- **Subnet:** `subnet-0ca6e05ed9d6e1871` (us-east-1d, public)
+- **Subnet:** None pinned — EC2 auto-spreads across AZs with capacity
 
 ## Stan agent setup
 
@@ -155,7 +176,7 @@ Before first use, ensure the orchestrator has:
 - [x] SSH key at `/root/.ssh/harbor-benchmark.pem`
 - [x] Secrets Manager access for `stan_pat-lUflBx` (via instance role)
 - [x] bun installed (`/root/.bun/bin/bun`) for the Harbor viewer dev mode
-- [x] Harbor viewer running: `harbor view jobs/ --port 8081 --host 0.0.0.0 --jobs --dev`
+- [x] Harbor viewer running: `harbor view jobs/ --port 7842 --host 0.0.0.0 --jobs`
 - [x] Docker network pool expanded (`/etc/docker/daemon.json` — only for local Docker runs)
 
 ## Known Limitations
