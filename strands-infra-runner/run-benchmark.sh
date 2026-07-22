@@ -102,18 +102,26 @@ print(json.loads(secret['SecretString'])['stan_pat'])
 ")
   pip install -q --force-reinstall --no-deps "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
 
-  # Auto-derive VERSION_TAG from installed package if not explicitly set
+  # Auto-derive VERSION_TAG from the pip direct_url.json (authoritative git commit)
   if [ -z "${VERSION_TAG:-}" ]; then
     VERSION_TAG=$(python3 -c "
-from importlib.metadata import version
-v = version('strands-agents-stan')
-# e.g. 0.0.1.dev4+g2c58790c1 → 2c58790
-if '+g' in v:
-    print(v.split('+g')[1][:7])
+import json
+from importlib.metadata import distribution
+dist = distribution('strands-agents-stan')
+direct_url_text = dist.read_text('direct_url.json')
+if direct_url_text:
+    info = json.loads(direct_url_text)
+    commit = info.get('vcs_info', {}).get('commit_id', '')
+    print(commit[:7] if commit else '')
 else:
-    print(v)
+    print('')
 ")
-    echo "  Stan commit: ${VERSION_TAG} (auto-detected)"
+    if [ -z "$VERSION_TAG" ]; then
+      echo "ERROR: Could not detect Stan commit from direct_url.json" >&2
+      echo "  Set VERSION_TAG explicitly or check pip install succeeded" >&2
+      exit 1
+    fi
+    echo "  Stan commit: ${VERSION_TAG} (from direct_url.json)"
     # Rebuild job name with the derived tag
     JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}"
   fi
