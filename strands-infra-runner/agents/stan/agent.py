@@ -21,7 +21,9 @@ def _resolve_model():
             return OpenAIResponsesModel(model_id=model_id, bedrock_mantle_config=mantle_config)
         else:
             from strands.models.openai import OpenAIModel
-            return OpenAIModel(model_id=model_id, bedrock_mantle_config=mantle_config)
+            # Non-GPT models: strip "openai." prefix, mantle expects bare ID
+            bare_id = model_id[len("openai."):]
+            return OpenAIModel(model_id=bare_id, bedrock_mantle_config=mantle_config)
     return model_id
 
 
