@@ -102,26 +102,17 @@ print(json.loads(secret['SecretString'])['stan_pat'])
 ")
   pip install -q --force-reinstall --no-deps "git+https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git@${STAN_BRANCH:-main}#subdirectory=stan-py"
 
-  # Auto-derive VERSION_TAG from the pip direct_url.json (authoritative git commit)
+  # Auto-derive VERSION_TAG by querying the actual remote HEAD (not pip metadata,
+  # which can be stale from cached installs).
   if [ -z "${VERSION_TAG:-}" ]; then
-    VERSION_TAG=$(python3 -c "
-import json
-from importlib.metadata import distribution
-dist = distribution('strands-agents-stan')
-direct_url_text = dist.read_text('direct_url.json')
-if direct_url_text:
-    info = json.loads(direct_url_text)
-    commit = info.get('vcs_info', {}).get('commit_id', '')
-    print(commit[:7] if commit else '')
-else:
-    print('')
-")
+    STAN_REF="${STAN_BRANCH:-main}"
+    VERSION_TAG=$(git ls-remote "https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git" "${STAN_REF}" | cut -c1-7)
     if [ -z "$VERSION_TAG" ]; then
-      echo "ERROR: Could not detect Stan commit from direct_url.json" >&2
-      echo "  Set VERSION_TAG explicitly or check pip install succeeded" >&2
+      echo "ERROR: Could not resolve Stan commit for ref '${STAN_REF}'" >&2
+      echo "  Check network access to github.com/awsarron/stan.git" >&2
       exit 1
     fi
-    echo "  Stan commit: ${VERSION_TAG} (from direct_url.json)"
+    echo "  Stan commit: ${VERSION_TAG} (from git ls-remote ${STAN_REF})"
     # Rebuild job name with the derived tag
     JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}"
   fi
