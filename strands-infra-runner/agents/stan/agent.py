@@ -1,9 +1,13 @@
-"""Stan's default factory agent for Harbor's installed Python adapter."""
+"""Stan factory agent for Harbor installed Python adapter."""
 
 import os
 
 from strands import Agent
 from strands_stan import harness_agent
+
+
+# Bedrock providers that support prompt caching
+_CACHING_PROVIDERS = frozenset({"anthropic", "us.anthropic", "global.anthropic"})
 
 
 def _resolve_model():
@@ -21,9 +25,20 @@ def _resolve_model():
     return model_id
 
 
+def _supports_caching(model_id):
+    if model_id is None:
+        return True
+    if not isinstance(model_id, str):
+        return True
+    provider = model_id.split(".")[0]
+    return provider in _CACHING_PROVIDERS
+
+
 class MyAgent:
     def create_agent(self) -> Agent:
         task_workdir = os.environ.get("HARBOR_TASK_WORKDIR")
         if task_workdir:
             os.chdir(task_workdir)
-        return harness_agent(model=_resolve_model())
+        model = _resolve_model()
+        caching = _supports_caching(model)
+        return harness_agent(model=model, caching=caching)
