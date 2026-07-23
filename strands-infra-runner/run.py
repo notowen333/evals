@@ -143,6 +143,7 @@ sys.argv = [
     "--ek", f'security_group_ids=["{SECURITY_GROUP}"]',
     *(["--ek", f"subnet_id={SUBNET}"] if SUBNET else []),
     "--ek", "ssh_user=ubuntu",
+    "--ek", "compose_up_timeout_sec=600",
     "--ek", f'tags={{"harbor:job":"{JOB_TAG}"}}',
     *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
     *[arg for k, v in _aws_creds.items() for arg in ("--ae", f"{k}={v}")],
