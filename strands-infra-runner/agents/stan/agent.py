@@ -25,12 +25,12 @@ def _resolve_model():
     return model_id
 
 
-def _supports_caching(model_id):
-    if model_id is None:
+def _supports_caching(model):
+    if model is None:
         return True
-    if not isinstance(model_id, str):
-        return True
-    provider = model_id.split(".")[0]
+    if not isinstance(model, str):
+        return False
+    provider = model.split(".")[0]
     return provider in _CACHING_PROVIDERS
 
 
