@@ -153,6 +153,7 @@ sys.argv = [
     "--max-retries", "2",
     "--retry-include", "EnvironmentStartTimeoutError",
     "--retry-include", "RuntimeError",
+    "--yes",
     "--debug",
 ]
 
