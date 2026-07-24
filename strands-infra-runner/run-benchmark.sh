@@ -53,7 +53,7 @@ case "$MODEL" in
     MODEL_ID="global.anthropic.claude-opus-4-6-v1"
     ;;
   opus-4.8|opus)
-    MODEL_ID="us.anthropic.claude-opus-4-8"
+    MODEL_ID="global.anthropic.claude-opus-4-8"
     ;;
   sonnet-5|sonnet5)
     MODEL_ID="global.anthropic.claude-sonnet-5"
