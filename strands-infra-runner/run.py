@@ -10,7 +10,7 @@ Prerequisites:
     - Security group allowing SSH inbound
 
 Usage:
-    .harbor-venv/bin/python examples/ec2-fleet/run.py
+    .venv/bin/python strands-infra-runner/run.py
 
 Customize by editing the sys.argv list below, or override via env vars.
 """
@@ -78,7 +78,7 @@ atexit.register(_terminate_fleet)
 AGENT_PATH = os.environ.get("AGENT_PATH", "./examples/benchmark_agent")
 AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
 AGENT_DEPS = os.environ.get("AGENT_DEPS")  # optional: override installed deps (default: strands-agents-tools)
-AGENT_NAME = os.environ.get("AGENT_NAME")  # display name for the viewer (e.g. stan_0.2.0)
+AGENT_NAME = os.environ.get("AGENT_NAME")  # display name for the viewer (e.g. stan)
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
 CONCURRENCY = os.environ.get("CONCURRENCY", "500")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE", "m7i.xlarge")

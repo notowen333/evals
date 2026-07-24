@@ -5,13 +5,12 @@
 #   run-benchmark <agent> <model> <dataset> [concurrency]
 #
 # Examples:
-#   run-benchmark stan_0.2.0 sonnet-4.6 terminal-bench/terminal-bench-2-1
-#   run-benchmark stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified 500
-#   run-benchmark stan_0.2.0 opus-4.8 gaia
-#   run-benchmark benchmark_agent sonnet-4.6 terminal-bench/terminal-bench-2-1 89
+#   run-benchmark stan sonnet-4.6 terminal-bench/terminal-bench-2-1
+#   run-benchmark stan kimi-k2.5 swe-bench/swe-bench-verified 500
+#   run-benchmark stan opus-4.8 gaia/gaia
 #
 # Results upload to: s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
-# Local results at:  jobs/<agent>--<model>--<dataset-slug>/
+# Local results at:  jobs/<agent>@<commit-sha>--<model>--<dataset-slug>/
 
 set -euo pipefail
 
@@ -59,6 +58,9 @@ case "$MODEL" in
   sonnet-5|sonnet5)
     MODEL_ID="global.anthropic.claude-sonnet-5"
     ;;
+  kimi-k2.5|kimi-2.5|kimi)
+    MODEL_ID="moonshotai.kimi-k2.5"
+    ;;
   *)
     # Allow passing raw model IDs
     MODEL_ID="$MODEL"
@@ -91,6 +93,74 @@ export HOME=/root
 export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
+
+configure_tau3_mantle() {
+  local secret_id="${BEDROCK_API_KEY_SECRET_ID:-bedrock_api_key}"
+  local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
+  local api_key
+
+  echo "Configuring TAU3 simulated user through Bedrock Mantle..."
+  if ! api_key=$(python3 - "$secret_id" "$mantle_region" <<'PY'
+import json
+import sys
+
+import boto3
+
+secret_id, region = sys.argv[1:]
+response = boto3.client("secretsmanager", region_name=region).get_secret_value(
+    SecretId=secret_id
+)
+secret_string = response.get("SecretString")
+if not secret_string:
+    raise SystemExit(f"Secret {secret_id!r} does not contain a SecretString")
+
+try:
+    decoded = json.loads(secret_string)
+except json.JSONDecodeError:
+    api_key = secret_string
+else:
+    if isinstance(decoded, str):
+        api_key = decoded
+    elif isinstance(decoded, dict):
+        api_key = next(
+            (
+                decoded[key]
+                for key in ("bedrock_api_key", "OPENAI_API_KEY", "api_key")
+                if isinstance(decoded.get(key), str) and decoded[key]
+            ),
+            None,
+        )
+        if api_key is None:
+            raise SystemExit(
+                f"Secret {secret_id!r} JSON must contain bedrock_api_key, "
+                "OPENAI_API_KEY, or api_key"
+            )
+    else:
+        raise SystemExit(f"Secret {secret_id!r} must be a string or JSON object")
+
+api_key = api_key.strip()
+if not api_key:
+    raise SystemExit(f"Secret {secret_id!r} contains an empty API key")
+sys.stdout.write(api_key)
+PY
+  ); then
+    echo "ERROR: Failed to load TAU3 Bedrock API key from Secrets Manager secret '${secret_id}'." >&2
+    exit 1
+  fi
+
+  export OPENAI_API_KEY="$api_key"
+  export OPENAI_BASE_URL="https://bedrock-mantle.${mantle_region}.api.aws/v1"
+  export TAU2_USER_MODEL="${TAU3_USER_MODEL:-openai/openai.gpt-oss-120b}"
+  export TAU2_NL_ASSERTIONS_MODEL="${TAU3_NL_ASSERTIONS_MODEL:-$TAU2_USER_MODEL}"
+
+  echo "  Mantle endpoint: ${OPENAI_BASE_URL}"
+  echo "  User model:      ${TAU2_USER_MODEL}"
+  echo "  Assertion model: ${TAU2_NL_ASSERTIONS_MODEL}"
+}
+
+if [[ "$DATASET" == sierra-research/tau3-bench* ]]; then
+  configure_tau3_mantle
+fi
 
 # Stan agents: install strands_stan from private repo and bundle it for container upload
 if [[ "$AGENT" == stan* ]]; then

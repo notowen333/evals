@@ -12,8 +12,9 @@ Via SSM from any machine with AWS credentials:
 aws ssm send-command \
   --instance-ids "i-0cfa2a926fa20f5f0" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["#!/bin/bash","cd /home/ubuntu/evals","setsid bash strands-infra-runner/run-benchmark.sh <agent> <model> <dataset> [concurrency] </dev/null >/home/ubuntu/<name>.log 2>&1 &","sleep 2","ps aux | grep run-benchmark | grep -v grep && echo LAUNCHED"]}' \
-  --timeout-seconds 120
+  --parameters '{"commands":["#!/bin/bash","export HOME=/root","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","setsid bash strands-infra-runner/run-benchmark.sh <agent> <model> <dataset> <concurrency> </dev/null >/home/ubuntu/<name>.log 2>&1 &","sleep 2","pgrep -af run-benchmark && echo LAUNCHED"]}' \
+  --timeout-seconds 120 \
+  --region us-east-1
 ```
 
 **Important:** SSM `AWS-RunShellScript` kills background processes when the command
@@ -29,38 +30,45 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | Options | Default |
 |-----|---------|---------|
-| `agent` | `stan_0.2.0`, `benchmark_agent`, or any dir under `examples/` | required |
-| `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
-| `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia`) | required |
-| `concurrency` | Number of parallel EC2 instances | 500 |
+| `agent` | `stan` or any dir under `strands-infra-runner/agents/` | required |
+| `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, `kimi-k2.5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
+| `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia/gaia`) | required |
+| `concurrency` | Number of parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
 
 ## Examples
 
 ```bash
 # SWE-bench Verified with Stan on Sonnet 4.6
-run-benchmark.sh stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified
+run-benchmark.sh stan sonnet-4.6 swe-bench/swe-bench-verified
 
-# Terminal-Bench 2.1 with the benchmark agent on Opus
-run-benchmark.sh benchmark_agent opus-4.8 terminal-bench/terminal-bench-2-1 89
+# Terminal-Bench 2.1 with Stan on Opus
+run-benchmark.sh stan opus-4.8 terminal-bench/terminal-bench-2-1 89
 
 # GAIA with Stan on Sonnet 4.6
-run-benchmark.sh stan_0.2.0 sonnet-4.6 gaia
+run-benchmark.sh stan sonnet-4.6 gaia/gaia
+
+# Terminal-Bench 2.1 with Stan on Kimi K2.5
+run-benchmark.sh stan kimi-k2.5 terminal-bench/terminal-bench-2-1 89
+
+# One-task TAU3 smoke test; the simulated user and grader use Bedrock Mantle
+run-benchmark.sh stan sonnet-4.6 sierra-research/tau3-bench 1
 ```
 
 ## Job naming and results
 
-Job names are auto-generated as `<agent>--<model>--<dataset-slug>`. This produces
+Job names are auto-generated as `<agent>@<commit-sha>--<model>--<dataset-slug>`.
+This produces
 a flat directory under `jobs/` that the Harbor viewer can scan directly:
 
 ```
 jobs/
-├── stan_0.2.0--sonnet-4.6--terminal-bench-terminal-bench-2-1/
+├── stan@2c58790--sonnet-4.6--terminal-bench-terminal-bench-2-1/
 │   ├── config.json       ← Harbor job config (agent, env, dataset)
 │   ├── result.json       ← Aggregate metrics (started_at, stats, evals)
 │   ├── lock.json
 │   ├── job.log
 │   └── <trial-id>/      ← One per task (contains agent logs, trajectory, etc.)
-├── stan_0.2.0--opus-4.8--medagentbench/
+├── stan@2c58790--opus-4.8--stanford-medagentbench/
 │   └── ...
 ```
 
@@ -81,7 +89,7 @@ s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 
 Local results on the orchestrator at:
 ```
-/home/ubuntu/evals/jobs/<agent>--<model>--<dataset-slug>/
+/home/ubuntu/evals/jobs/<agent>@<commit-sha>--<model>--<dataset-slug>/
 ```
 
 ### Viewing results
@@ -143,7 +151,7 @@ aws ssm send-command ... --parameters '{"commands":["aws ec2 describe-instances 
 
 ## Stan agent setup
 
-Stan agents (`stan_*`) are installed directly from the private repo via a GitHub
+The Stan agent is installed directly from the private repo via a GitHub
 PAT stored in Secrets Manager (`stan_pat-lUflBx`). No manual sync or scp needed.
 
 - `STAN_BRANCH` env var controls which branch to install (default: `main`).
@@ -154,15 +162,52 @@ PAT stored in Secrets Manager (`stan_pat-lUflBx`). No manual sync or scp needed.
 To cut a new Stan version for benchmarking, just tag/branch in the Stan repo and
 pass `STAN_BRANCH=<ref>` when launching the run.
 
+## TAU3 simulated user setup
+
+For datasets whose name starts with `sierra-research/tau3-bench`,
+`run-benchmark.sh` fetches the Bedrock API key from the Secrets Manager secret
+`bedrock_api_key` before launching any fleet instances. The secret can be either:
+
+- A raw API key in `SecretString`.
+- A JSON object containing `bedrock_api_key`, `OPENAI_API_KEY`, or `api_key`.
+
+The launcher exports the values expected by the published TAU3 Harbor package:
+
+```text
+OPENAI_API_KEY=<value from Secrets Manager>
+OPENAI_BASE_URL=https://bedrock-mantle.us-east-1.api.aws/v1
+TAU2_USER_MODEL=openai/openai.gpt-oss-120b
+TAU2_NL_ASSERTIONS_MODEL=openai/openai.gpt-oss-120b
+```
+
+The first `openai/` in each model value selects LiteLLM's OpenAI-compatible
+transport; `openai.gpt-oss-120b` is the model ID sent to Mantle. Harbor resolves
+these task variables on the orchestrator and injects them into the remote TAU3
+runtime and verifier containers. They must not be passed with `--ae`, which only
+configures the evaluated agent.
+
+Optional overrides:
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `BEDROCK_API_KEY_SECRET_ID` | Secrets Manager name or ARN | `bedrock_api_key` |
+| `TAU3_MANTLE_REGION` | Mantle and secret region | `us-east-1` |
+| `TAU3_USER_MODEL` | LiteLLM-prefixed simulated-user model | `openai/openai.gpt-oss-120b` |
+| `TAU3_NL_ASSERTIONS_MODEL` | LiteLLM-prefixed assertion-grader model | Same as `TAU3_USER_MODEL` |
+
+The orchestrator instance role needs `secretsmanager:GetSecretValue` for
+`bedrock_api_key`. The launcher exits before provisioning fleet instances when
+the secret is missing, empty, malformed, or inaccessible.
+
 ## Directory layout on the orchestrator
 
 ```
 /home/ubuntu/evals/
 ├── jobs/                ← active benchmark results (viewer points here)
-│   ├── stan_0.2.0--opus-4.8--medagentbench/
+│   ├── stan@2c58790--opus-4.8--stanford-medagentbench/
 │   └── ...
 ├── jobs/legacy/         ← old/pre-refactor results (not shown in viewer)
-└── examples/stan_0.2.0/ ← agent wrapper (agent.py only, no Stan source)
+└── strands-infra-runner/agents/stan/ ← agent wrapper and bundled Stan source
 ```
 
 Old results were moved to `jobs/legacy/` so the viewer only shows current runs.
@@ -175,6 +220,7 @@ Before first use, ensure the orchestrator has:
 - [x] venv installed: `source .venv/bin/activate && pip install -e .[harbor]`
 - [x] SSH key at `/root/.ssh/harbor-benchmark.pem`
 - [x] Secrets Manager access for `stan_pat-lUflBx` (via instance role)
+- [x] Secrets Manager access for `bedrock_api_key` (required for TAU3)
 - [x] bun installed (`/root/.bun/bin/bun`) for the Harbor viewer dev mode
 - [x] Harbor viewer running: `harbor view jobs/ --port 7842 --host 0.0.0.0 --jobs`
 - [x] Docker network pool expanded (`/etc/docker/daemon.json` — only for local Docker runs)
@@ -184,7 +230,9 @@ Before first use, ensure the orchestrator has:
 - **`allow_internet=false` benchmarks** (e.g. DeepSWE) do not work on the EC2 fleet.
   The EC2 environment applies `network_mode: none` statically — no dynamic switching.
   These require Docker local or Modal environments.
-- **Orchestrator must stay alive** for the full run. Use `nohup` + SSM. If it dies,
+- **Orchestrator must stay alive** for the full run. Use `setsid` + SSM. If it dies,
   the cleanup handler terminates orphan instances but S3 upload won't fire.
 - **EC2 RunInstances rate limit** (bucket 5, refill 2/sec) causes some launch failures
   at 500 concurrency. `--max-retries 2 --retry-include RuntimeError` handles this.
+- **Kimi K2.5 has no native web-search integration** through the Bedrock provider.
+  Stan continues without `web_search`; `web_fetch` uses Kimi itself for summarization.
