@@ -204,7 +204,7 @@ fi
 # Use a lockfile to avoid races when multiple benchmarks launch concurrently.
 (
   flock -x 200
-  pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-fork
+  pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-working-fork
 ) 200>/tmp/harbor-install.lock
 
 # Archive previous run if it exists (NEVER delete results)

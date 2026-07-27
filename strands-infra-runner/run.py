@@ -70,7 +70,7 @@ signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
 atexit.register(_terminate_fleet)
 
-# Thread pool scaling is handled natively by the Harbor fork (strands-fork)
+# Thread pool scaling is handled natively by the Harbor fork (strands-working-fork)
 # in cli/utils.py — it sets max_workers based on n_concurrent_trials.
 # No monkeypatch needed.
 
