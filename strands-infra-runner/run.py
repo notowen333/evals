@@ -80,6 +80,8 @@ AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
 AGENT_DEPS = os.environ.get("AGENT_DEPS")  # optional: override installed deps (default: strands-agents-tools)
 AGENT_NAME = os.environ.get("AGENT_NAME")  # display name for the viewer (e.g. stan)
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
+DATASET_PATH = os.environ.get("DATASET_PATH")
+JOB_PLUGIN = os.environ.get("JOB_PLUGIN")
 CONCURRENCY = os.environ.get("CONCURRENCY", "500")
 INSTANCE_TYPE = os.environ.get("INSTANCE_TYPE", "m7i.xlarge")
 ROOT_VOLUME_GB = os.environ.get("ROOT_VOLUME_GB", "64")
@@ -130,7 +132,8 @@ sys.argv = [
     "--ak", f"agent_path={AGENT_PATH}",
     "--ak", f"agent_module={AGENT_MODULE}",
     *(["--ak", f"agent_deps={AGENT_DEPS}"] if AGENT_DEPS else []),
-    "-d", DATASET,
+    *(("-p", DATASET_PATH) if DATASET_PATH else ("-d", DATASET)),
+    *(("--plugin", JOB_PLUGIN) if JOB_PLUGIN else ()),
     "-n", CONCURRENCY,
     *(["-l", N_TASKS] if N_TASKS else []),
     "-e", "ec2",

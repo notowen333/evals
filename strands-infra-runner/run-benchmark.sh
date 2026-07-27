@@ -19,6 +19,8 @@ MODEL="${2:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STRANDS_HARNESS_DATASET="strands-harness-benchmark-index"
+HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
 
 # Auto-resolve concurrency from datasets.json (task count, capped at 2000)
 if [ -n "${4:-}" ]; then
@@ -94,6 +96,33 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 cd /home/ubuntu/evals
 source .venv/bin/activate
 
+if [[ "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then
+  export DATASET_PATH="${HARBOR_STRANDS_CHECKOUT}/datasets/${STRANDS_HARNESS_DATASET}"
+  METRIC_PLUGIN_DIR="${HARBOR_STRANDS_CHECKOUT}/adapters/${STRANDS_HARNESS_DATASET}"
+
+  if [ ! -d "$DATASET_PATH" ]; then
+    echo "ERROR: Custom dataset is not materialized at ${DATASET_PATH}" >&2
+    echo "  Run: bash strands-infra-runner/setup-strands-harness-benchmark.sh" >&2
+    exit 1
+  fi
+  if [ ! -f "${METRIC_PLUGIN_DIR}/metric_plugin.py" ]; then
+    echo "ERROR: Custom metric plugin is missing from ${METRIC_PLUGIN_DIR}" >&2
+    exit 1
+  fi
+
+  MATERIALIZED_TASKS=$(find "$DATASET_PATH" -mindepth 2 -maxdepth 2 -name task.toml | wc -l)
+  if [ "$MATERIALIZED_TASKS" -ne 206 ]; then
+    echo "ERROR: Expected 206 custom benchmark tasks, found ${MATERIALIZED_TASKS}" >&2
+    echo "  Re-run: bash strands-infra-runner/setup-strands-harness-benchmark.sh" >&2
+    exit 1
+  fi
+
+  export PYTHONPATH="${METRIC_PLUGIN_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+  export JOB_PLUGIN="metric_plugin:StrandsHarnessBenchmarkMetricPlugin"
+  echo "  Local dataset: ${DATASET_PATH} (${MATERIALIZED_TASKS} tasks)"
+  echo "  Metric plugin: ${JOB_PLUGIN}"
+fi
+
 configure_tau3_mantle() {
   local secret_id="${BEDROCK_API_KEY_SECRET_ID:-bedrock_api_key}"
   local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
@@ -158,7 +187,7 @@ PY
   echo "  Assertion model: ${TAU2_NL_ASSERTIONS_MODEL}"
 }
 
-if [[ "$DATASET" == sierra-research/tau3-bench* ]]; then
+if [[ "$DATASET" == sierra-research/tau3-bench* || "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then
   configure_tau3_mantle
 fi
 
