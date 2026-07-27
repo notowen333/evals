@@ -74,9 +74,12 @@ INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 
 # --- Build job name and paths ---
 DATASET_SLUG="${DATASET//\//-}"
-JOB_NAME="${AGENT}${VERSION_TAG:+@${VERSION_TAG}}--${MODEL}--${DATASET_SLUG}"
+# JOB_NAME_SUFFIX distinguishes otherwise-identical runs (e.g. "--k4" for pass@k),
+# so a pass@4 run never archives or overwrites the pass@1 results.
+JOB_SUFFIX="${JOB_NAME_SUFFIX:-}"
+JOB_NAME="${AGENT}${VERSION_TAG:+@${VERSION_TAG}}--${MODEL}--${DATASET_SLUG}${JOB_SUFFIX}"
 OUTPUT_DIR="jobs"
-S3_PREFIX="${AGENT}/${MODEL}/${DATASET_SLUG}"
+S3_PREFIX="${AGENT}/${MODEL}/${DATASET_SLUG}${JOB_SUFFIX}"
 LOG_FILE="/home/ubuntu/benchmark-${JOB_NAME}.log"
 
 echo "=== Benchmark Run ==="
@@ -213,7 +216,7 @@ print(json.loads(secret['SecretString'])['stan_pat'])
     fi
     echo "  Stan commit: ${VERSION_TAG} (from git ls-remote ${STAN_REF})"
     # Rebuild job name with the derived tag
-    JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}"
+    JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}${JOB_SUFFIX}"
   fi
 
   # Bundle strands_stan into the agent dir so it gets uploaded to fleet containers
@@ -260,13 +263,20 @@ export AGENT_MODULE="$AGENT_MODULE"
 export AGENT_NAME="$AGENT"
 export STRANDS_MODEL="$MODEL_ID"
 
+# Never let a failed run abort the script — the S3 upload below must always run so
+# partial results are preserved. `set -e`/`pipefail` would otherwise kill us here,
+# and `$?` after a pipe reports tee's status, not the runner's.
+set +e
 python strands-infra-runner/run.py 2>&1 | tee "$LOG_FILE"
-RUN_EXIT=$?
+RUN_EXIT=${PIPESTATUS[0]}
+set -e
 
 # Patch config.agent.name from the import path to the friendly agent name.
 # Harbor writes the import path as the name; the viewer uses this field for display.
-find "${OUTPUT_DIR}/${JOB_NAME}" -name config.json \
-  -exec sed -i "s|\"name\": \"strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent\"|\"name\": \"${AGENT}\"|g" {} +
+if [ -d "${OUTPUT_DIR}/${JOB_NAME}" ]; then
+  find "${OUTPUT_DIR}/${JOB_NAME}" -name config.json \
+    -exec sed -i "s|\"name\": \"strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent\"|\"name\": \"${AGENT}\"|g" {} +
+fi
 
 # --- Upload results to S3 (always runs, even on partial failure) ---
 echo ""

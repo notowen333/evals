@@ -93,6 +93,8 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 JOB_NAME = os.environ.get("JOB_NAME", "ec2-fleet")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "jobs/ec2-fleet")
 N_TASKS = os.environ.get("N_TASKS")  # optional: cap number of tasks (for testing)
+N_ATTEMPTS = os.environ.get("N_ATTEMPTS")  # optional: attempts per task (pass@k)
+MAX_RETRIES = os.environ.get("MAX_RETRIES", "2")
 TASK_NAMES = [
     name.strip()
     for name in os.environ.get("TASK_NAMES", "").split(",")
@@ -140,6 +142,7 @@ sys.argv = [
     *(("-p", DATASET_PATH) if DATASET_PATH else ("-d", DATASET)),
     *(("--plugin", JOB_PLUGIN) if JOB_PLUGIN else ()),
     "-n", CONCURRENCY,
+    *(["-k", N_ATTEMPTS] if N_ATTEMPTS else []),
     *[arg for name in TASK_NAMES for arg in ("-i", name)],
     *(["-l", N_TASKS] if N_TASKS else []),
     "-e", "ec2",
@@ -159,9 +162,12 @@ sys.argv = [
     *(["--ae", f"STRANDS_MODEL={os.environ['STRANDS_MODEL']}"] if os.environ.get("STRANDS_MODEL") else []),
     "-o", OUTPUT_DIR,
     "--job-name", JOB_NAME,
-    "--max-retries", "2",
+    "--max-retries", MAX_RETRIES,
     "--retry-include", "EnvironmentStartTimeoutError",
     "--retry-include", "RuntimeError",
+    # Bedrock throttling was the single largest error class in the k=1 baselines
+    # (53/206 on sonnet-5). Retrying it keeps a throttled trial from scoring 0.
+    "--retry-include", "ApiRateLimitError",
     "--yes",
     "--debug",
 ]
