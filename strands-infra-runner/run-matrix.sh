@@ -106,6 +106,34 @@ except Exception:
 
 TASK_COUNT="$(dataset_task_count)"
 
+# --- Pin the agent version for the WHOLE matrix ---------------------------
+# Each cell would otherwise resolve Stan's branch HEAD independently. Over a
+# 10h+ matrix, a push to Stan mid-run would silently give later models a
+# different agent version than earlier ones, making the comparison invalid.
+# Resolve the SHA once here and hand every cell that exact commit.
+pin_stan_commit() {
+  local pat ref="${STAN_BRANCH:-main}"
+  pat=$(python3 -c "
+import json, boto3
+c = boto3.client('secretsmanager', region_name='us-east-1')
+s = c.get_secret_value(SecretId='arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx')
+print(json.loads(s['SecretString'])['stan_pat'])
+" 2>/dev/null) || return 1
+  git ls-remote "https://x-access-token:${pat}@github.com/awsarron/stan.git" "$ref" \
+    | awk '{print $1}' | head -1
+}
+
+PINNED_STAN_SHA=""
+if [[ "$AGENT" == stan* ]]; then
+  PINNED_STAN_SHA="$(pin_stan_commit)"
+  if [ -z "$PINNED_STAN_SHA" ]; then
+    echo "ERROR: Could not resolve Stan commit for ref '${STAN_BRANCH:-main}'." >&2
+    echo "  Refusing to start: cells would each resolve their own SHA and the" >&2
+    echo "  matrix would not be internally comparable." >&2
+    exit 1
+  fi
+fi
+
 # Concurrency for one cell: never more than there are tasks, never above this
 # model's token cap, never above the EC2 ceiling or Harbor's SSH/FD limit.
 cell_concurrency() {
@@ -171,7 +199,7 @@ IFS=',' read -r -a MODEL_LIST <<<"$MODELS"
 log "=== Matrix start: ${MATRIX_ID} ==="
 log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
 log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per model"
-log "  Agent:    ${AGENT}"
+log "  Agent:    ${AGENT}${PINNED_STAN_SHA:+ @ ${PINNED_STAN_SHA:0:7} (pinned for all cells)}"
 log "  Models:   ${MODELS}"
 log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one model at a time"
 for m in "${MODEL_LIST[@]}"; do
@@ -182,6 +210,132 @@ done
 log "  State:    ${STATE_DIR}"
 
 rm -f "${STATE_DIR}/COMPLETE"
+
+# --- Preflight -------------------------------------------------------------
+# Fail in the first minute rather than at 3am after burning a cell. Every check
+# here corresponds to a failure we have actually hit on this rig.
+preflight() {
+  local fail=0
+
+  # Orchestrator creds. If these are dead, every cell dies identically.
+  if ! aws sts get-caller-identity --region us-east-1 >/dev/null 2>&1; then
+    echo "PREFLIGHT FAIL: AWS credentials are not usable on the orchestrator" >&2
+    fail=1
+  fi
+
+  # Disk. A 206-task job dir is ~166MB; k=2 doubles it, times N models.
+  local avail_gb needed_gb
+  avail_gb=$(df -BG --output=avail /home/ubuntu | tail -1 | tr -dc '0-9')
+  needed_gb=$(python3 -c "print(max(5, int(0.18 * ${TASK_COUNT} * ${N_ATTEMPTS} * ${#MODEL_LIST[@]} / 1024) + 5))")
+  if [ "${avail_gb:-0}" -lt "$needed_gb" ]; then
+    echo "PREFLIGHT FAIL: only ${avail_gb}GB free on /home/ubuntu, need ~${needed_gb}GB" >&2
+    fail=1
+  else
+    log "  preflight: disk ${avail_gb}GB free (need ~${needed_gb}GB) OK"
+  fi
+
+  # Dataset is materialized and matches the adapter's declared size.
+  local ds="${HARBOR_STRANDS_CHECKOUT}/datasets/${DATASET}"
+  local adapter="${HARBOR_STRANDS_CHECKOUT}/adapters/${DATASET}"
+  if [ -d "$ds" ]; then
+    local expected
+    expected=$(python3 -c "
+import json
+try:
+    with open('${adapter}/adapter_metadata.json') as fh:
+        print(json.load(fh)[0]['harbor_adapter'][0]['adapted_benchmark_size'])
+except Exception:
+    print('')
+" 2>/dev/null)
+    if [ -n "$expected" ] && [ "$TASK_COUNT" -ne "$expected" ]; then
+      echo "PREFLIGHT FAIL: dataset has ${TASK_COUNT} tasks, adapter declares ${expected}" >&2
+      echo "  Re-run: bash strands-infra-runner/setup-strands-harness-benchmark.sh" >&2
+      fail=1
+    else
+      log "  preflight: dataset ${TASK_COUNT} tasks OK"
+    fi
+    if [ ! -f "${adapter}/metric_plugin.py" ]; then
+      echo "PREFLIGHT FAIL: metric plugin missing at ${adapter}/metric_plugin.py" >&2
+      fail=1
+    fi
+  fi
+
+  # Mantle key: needed by the tau3 slice of the index AND by any openai.* model.
+  if ! python3 -c "
+import boto3
+boto3.client('secretsmanager', region_name='us-east-1').get_secret_value(
+    SecretId='${BEDROCK_API_KEY_SECRET_ID:-bedrock_api_key}')
+" >/dev/null 2>&1; then
+    echo "PREFLIGHT FAIL: cannot read Secrets Manager '${BEDROCK_API_KEY_SECRET_ID:-bedrock_api_key}'" >&2
+    echo "  The tau3 slice of the index and all openai.* models need this." >&2
+    fail=1
+  else
+    log "  preflight: mantle API key readable OK"
+  fi
+
+  # Every model resolves to a real endpoint. A bad alias silently falls through
+  # to a raw model ID and fails all 206 tasks (this is how the kimi run died:
+  # 724/734 ValidationException on 'kimi-k2.5').
+  local m
+  for m in "${MODEL_LIST[@]}"; do
+    m="$(echo "$m" | tr -d '[:space:]')"
+    [ -z "$m" ] && continue
+    if ! MODEL_CHECK="$m" python3 - <<'PY'
+import os
+import sys
+
+import boto3
+
+alias = os.environ["MODEL_CHECK"]
+aliases = {
+    "sonnet-4.6": "us.anthropic.claude-sonnet-4-6",
+    "sonnet": "us.anthropic.claude-sonnet-4-6",
+    "opus-4.6": "global.anthropic.claude-opus-4-6-v1",
+    "opus-4.8": "global.anthropic.claude-opus-4-8",
+    "opus": "global.anthropic.claude-opus-4-8",
+    "sonnet-5": "global.anthropic.claude-sonnet-5",
+    "sonnet5": "global.anthropic.claude-sonnet-5",
+    "kimi-k2.5": "moonshotai.kimi-k2.5",
+    "kimi-2.5": "moonshotai.kimi-k2.5",
+    "kimi": "moonshotai.kimi-k2.5",
+}
+model_id = aliases.get(alias, alias)
+
+# openai.* models go through the Mantle proxy, not Bedrock's model registry.
+if model_id.startswith("openai."):
+    sys.exit(0)
+
+base = model_id.split(".", 1)[1] if model_id.split(".", 1)[0] in {
+    "us", "global", "eu", "apac"
+} else model_id
+known = {
+    m["modelId"]
+    for m in boto3.client("bedrock", region_name="us-east-1").list_foundation_models()[
+        "modelSummaries"
+    ]
+}
+if not any(k == base or k.startswith(base) for k in known):
+    print(f"  '{alias}' -> '{model_id}' not found in Bedrock us-east-1", file=sys.stderr)
+    sys.exit(1)
+PY
+    then
+      echo "PREFLIGHT FAIL: model '${m}' does not resolve to a known endpoint" >&2
+      fail=1
+    fi
+  done
+  [ "$fail" -eq 0 ] && log "  preflight: all ${#MODEL_LIST[@]} models resolve OK"
+
+  return "$fail"
+}
+
+if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
+  log "Running preflight checks..."
+  if ! preflight; then
+    log "ABORTING: preflight failed. Fix the above, or set SKIP_PREFLIGHT=1 to override."
+    exit 2
+  fi
+  log "Preflight passed."
+fi
 
 FAILED=()
 SKIPPED=()
@@ -221,8 +375,12 @@ for MODEL in "${MODEL_LIST[@]}"; do
 
   # JOB_NAME_SUFFIX gives the pass@k run its own job dir and S3 prefix so it
   # never archives or overwrites the k=1 baselines.
+  # STAN_BRANCH is the pinned SHA (not a branch name) so every cell installs the
+  # identical agent build; VERSION_TAG keeps job dirs tagged with that SHA.
   JOB_NAME_SUFFIX="--k${N_ATTEMPTS}" \
   N_ATTEMPTS="$N_ATTEMPTS" \
+  ${PINNED_STAN_SHA:+STAN_BRANCH="$PINNED_STAN_SHA"} \
+  ${PINNED_STAN_SHA:+VERSION_TAG="${PINNED_STAN_SHA:0:7}"} \
     bash "${EVALS_DIR}/strands-infra-runner/run-benchmark.sh" \
       "$AGENT" "$MODEL" "$DATASET" "$CELL_CONCURRENCY" \
       </dev/null >"$CELL_LOG" 2>&1
