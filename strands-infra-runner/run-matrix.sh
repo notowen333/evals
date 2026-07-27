@@ -1,46 +1,67 @@
 #!/bin/bash
-# run-matrix.sh — Fire-and-forget pass@k matrix runner.
+# run-matrix.sh — Fire-and-forget pass@k matrix launcher.
 #
-# Runs a set of models against a dataset SEQUENTIALLY, one model at a time, so
-# the fleet never exceeds one model's worth of instances. Each model's trials
-# still run at full concurrency inside its own run. Designed to be launched once
-# via SSM + setsid and left alone overnight.
+# Launches the model matrix against a dataset and walks away. Two concurrency
+# limits are respected:
+#
+#   EC2:   models run SEQUENTIALLY, so peak fleet size is one cell's worth of
+#          instances no matter how many models or how large k is.
+#   Tokens: per-cell concurrency is capped per model (see MODEL_CONCURRENCY),
+#          because Bedrock throttling — not EC2 — was the largest error class in
+#          the k=1 baselines (sonnet-5: 53/206 ApiRateLimitError).
 #
 # Usage:
-#   run-matrix.sh [options]
-#
-# Options (all optional, with defaults):
-#   -d <dataset>     Harbor dataset            (default: strands-harness-benchmark-index)
-#   -k <n>           Attempts per task         (default: 4)
-#   -m <models>      Comma-separated models    (default: see DEFAULT_MODELS)
-#   -n <concurrency> Concurrent trials per run (default: auto from vCPU budget)
-#   -a <agent>       Agent name                (default: stan)
+#   run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]
 #
 # Examples:
-#   run-matrix.sh                              # full default matrix at pass@4
-#   run-matrix.sh -k 8 -m opus-4.8,sonnet-4.6  # two models at pass@8
-#   run-matrix.sh -d gaia/gaia -k 3
+#   run-matrix.sh                                  # 5-model matrix at pass@2
+#   run-matrix.sh -k 4                             # same matrix at pass@4
+#   run-matrix.sh -m opus-4.8,sonnet-4.6 -k 2      # just two models
 #
-# State/logs:
-#   /home/ubuntu/matrix-runs/<matrix-id>/matrix.log     ← driver log (tail this)
-#   /home/ubuntu/matrix-runs/<matrix-id>/status.tsv     ← one line per cell
-#   /home/ubuntu/matrix-runs/<matrix-id>/<cell>.log     ← per-model run log
-#   /home/ubuntu/matrix-runs/<matrix-id>/COMPLETE       ← written when all done
+# State/logs (tail these):
+#   <state>/matrix.log    driver log — one line per cell start/finish
+#   <state>/status.tsv    machine-readable cell status
+#   <state>/<model>.log   full run log for that cell
+#   <state>/COMPLETE      written when the whole matrix finishes
+#   where <state> = /home/ubuntu/matrix-runs/<dataset-slug>--k<N>/
 #
-# Resumability: re-running with the same -d/-k/-m reuses the same matrix-id and
-# skips cells already marked OK in status.tsv.
+# Resumable: re-run with the same -d/-k and cells already marked OK are skipped.
 
 set -uo pipefail
 
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_ROOT="${MATRIX_STATE_ROOT:-/home/ubuntu/matrix-runs}"
+HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
 
 DATASET="strands-harness-benchmark-index"
-N_ATTEMPTS=4
+N_ATTEMPTS=2
 AGENT="stan"
 CONCURRENCY=""
-DEFAULT_MODELS="opus-4.8,openai.gpt-5.6-sol,sonnet-4.6,sonnet-5,openai.zai.glm-5,kimi-k2.5"
+
+# The five models with full k=1 baselines on the index.
+DEFAULT_MODELS="opus-4.8,openai.gpt-5.6-sol,sonnet-5,openai.zai.glm-5,kimi-k2.5"
 MODELS=""
+
+# --- Token-concurrency caps (nodes) --------------------------------------
+# Max concurrent trials per model, i.e. max in-flight requests to that endpoint.
+# Anything not listed uses DEFAULT_MODEL_CONCURRENCY. Lower = fewer
+# ApiRateLimitErrors, longer wall clock. Tuned from the k=1 baseline error rates:
+#   sonnet-5     53/206 throttled at ~206 concurrent → cap hard
+#   glm-5/kimi   mantle + moonshot, moderate error rates → cap moderately
+#   opus/gpt-sol 8 and 28 errors, mostly not throttling → run wide
+DEFAULT_MODEL_CONCURRENCY=120
+
+model_token_cap() {
+  case "$1" in
+    opus-4.8|opus)          echo 206 ;;  # 8/206 errors at full width — run wide
+    openai.gpt-5.6-sol)     echo 206 ;;  # 28/206, mostly stream drops not 429s
+    sonnet-5)               echo 80  ;;  # 53/206 throttled — cap hard
+    sonnet-4.6|sonnet)      echo 120 ;;
+    openai.zai.glm-5)       echo 100 ;;  # mantle proxy, moderate error rate
+    kimi-k2.5|kimi)         echo 100 ;;
+    *)                      echo "$DEFAULT_MODEL_CONCURRENCY" ;;
+  esac
+}
 
 while getopts "d:k:m:n:a:" opt; do
   case "$opt" in
@@ -49,113 +70,79 @@ while getopts "d:k:m:n:a:" opt; do
     m) MODELS="$OPTARG" ;;
     n) CONCURRENCY="$OPTARG" ;;
     a) AGENT="$OPTARG" ;;
-    *) echo "Unknown option" >&2; exit 2 ;;
+    *) echo "Usage: run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]" >&2; exit 2 ;;
   esac
 done
 MODELS="${MODELS:-$DEFAULT_MODELS}"
 
-# --- Fleet sizing ---------------------------------------------------------
-# The binding constraint is the EC2 On-Demand Standard vCPU quota in this
-# region, NOT the task count. Each fleet node is m7i.xlarge = 4 vCPU. We spend
-# at most FLEET_VCPU_BUDGET vCPU on fleet nodes at any moment, leaving the rest
-# of the quota as headroom for the orchestrator and any manual runs.
-#
-# Because models run one at a time, peak fleet size == this cap, regardless of
-# how many models or how large k is.
+# --- EC2 ceiling ---------------------------------------------------------
+# Static on purpose: a full wave of the 206-task index is 824 vCPU, well under
+# the account's 9216 vCPU On-Demand Standard quota, so EC2 headroom is not the
+# binding constraint and a quota API lookup would only add a silent failure mode.
 VCPU_PER_NODE=4
-QUOTA_SAFETY_FRACTION="${QUOTA_SAFETY_FRACTION:-0.55}"
+MAX_FLEET_VCPU="${MAX_FLEET_VCPU:-2048}"
+MAX_FLEET_NODES=$((MAX_FLEET_VCPU / VCPU_PER_NODE))
 
-# Currently-available vCPU under our safety fraction of the regional quota.
-vcpu_headroom() {
-  python3 - "$QUOTA_SAFETY_FRACTION" <<'PY'
+# Task count for this dataset. For the locally-materialized index, count dirs on
+# disk — datasets.json carries a hardcoded number that goes stale as the index
+# grows (206 today, ~250 expected).
+dataset_task_count() {
+  local local_ds="${HARBOR_STRANDS_CHECKOUT}/datasets/${DATASET}" n=""
+  if [ -d "$local_ds" ]; then
+    n=$(find "$local_ds" -mindepth 2 -maxdepth 2 -name task.toml | wc -l | tr -d ' ')
+  fi
+  if [ -z "$n" ] || [ "$n" -eq 0 ]; then
+    n=$(python3 -c "
+import json
+try:
+    with open('${EVALS_DIR}/strands-infra-runner/datasets.json') as fh:
+        print(int(json.load(fh).get('${DATASET}', 500)))
+except Exception:
+    print(500)
+")
+  fi
+  echo "$n"
+}
+
+TASK_COUNT="$(dataset_task_count)"
+
+# Concurrency for one cell: never more than there are tasks, never above this
+# model's token cap, never above the EC2 ceiling or Harbor's SSH/FD limit.
+cell_concurrency() {
+  local model="$1"
+  if [ -n "$CONCURRENCY" ]; then
+    echo "$CONCURRENCY"
+    return
+  fi
+  local cap
+  cap="$(model_token_cap "$model")"
+  python3 -c "print(max(1, min(${TASK_COUNT}, ${cap}, ${MAX_FLEET_NODES}, 500)))"
+}
+
+# vCPU currently consumed by running/pending instances in the region.
+fleet_vcpu_in_use() {
+  python3 <<'PY'
 import sys
 
 import boto3
 
-safety = float(sys.argv[1])
-try:
-    quota = boto3.client("service-quotas", region_name="us-east-1").get_service_quota(
-        ServiceCode="ec2", QuotaCode="L-1216C47A"
-    )["Quota"]["Value"]
-except Exception:
-    quota = 640.0
-
-running = 0
 try:
     ec2 = boto3.client("ec2", region_name="us-east-1")
+    total = 0
     for page in ec2.get_paginator("describe_instances").paginate(
         Filters=[{"Name": "instance-state-name", "Values": ["running", "pending"]}]
     ):
         for res in page["Reservations"]:
             for inst in res["Instances"]:
                 opts = inst.get("CpuOptions", {})
-                running += opts.get("CoreCount", 1) * opts.get("ThreadsPerCore", 1)
-except Exception:
-    # Unknown usage: assume the budget is spent rather than over-provisioning.
-    running = int(quota * safety)
-
-print(max(0, int(quota * safety) - running))
+                total += opts.get("CoreCount", 1) * opts.get("ThreadsPerCore", 1)
+    print(total)
+except Exception as exc:
+    # Unknown usage: report the ceiling so callers wait rather than pile on.
+    print(f"WARNING: describe-instances failed: {exc}", file=sys.stderr)
+    print(10**9)
 PY
 }
-
-resolve_concurrency() {
-  if [ -n "$CONCURRENCY" ]; then
-    echo "$CONCURRENCY"
-    return
-  fi
-  python3 - "$DATASET" "$N_ATTEMPTS" "$VCPU_PER_NODE" "$QUOTA_SAFETY_FRACTION" <<'PY'
-import json
-import sys
-
-import boto3
-
-dataset, n_attempts, vcpu_per_node, safety = sys.argv[1:]
-n_attempts = int(n_attempts)
-vcpu_per_node = int(vcpu_per_node)
-safety = float(safety)
-
-try:
-    with open("/home/ubuntu/evals/strands-infra-runner/datasets.json") as fh:
-        tasks = int(json.load(fh).get(dataset, 500))
-except Exception:
-    tasks = 500
-
-# vCPU quota headroom, minus what is already running.
-try:
-    quota = boto3.client("service-quotas", region_name="us-east-1").get_service_quota(
-        ServiceCode="ec2", QuotaCode="L-1216C47A"
-    )["Quota"]["Value"]
-except Exception:
-    quota = 640.0
-
-try:
-    ec2 = boto3.client("ec2", region_name="us-east-1")
-    running = 0
-    paginator = ec2.get_paginator("describe_instances")
-    for page in paginator.paginate(
-        Filters=[{"Name": "instance-state-name", "Values": ["running", "pending"]}]
-    ):
-        for res in page["Reservations"]:
-            for inst in res["Instances"]:
-                running += inst.get("CpuOptions", {}).get("CoreCount", 1) * inst.get(
-                    "CpuOptions", {}
-                ).get("ThreadsPerCore", 1)
-except Exception:
-    running = 32
-
-budget = max(0.0, quota * safety - running)
-by_quota = int(budget // vcpu_per_node)
-
-# Cap at the TASK count, not tasks*attempts. The k=1 baselines showed the real
-# ceiling is Bedrock throttling (53 ApiRateLimitError on sonnet-5), not EC2:
-# holding concurrency at one-pass width keeps the model request rate identical to
-# those runs and lets the k attempts spread over time instead of all at once.
-# Also capped at Harbor's practical per-orchestrator ceiling (SSH sessions/FDs).
-print(max(1, min(by_quota, tasks, 500)))
-PY
-}
-
-RESOLVED_CONCURRENCY="$(resolve_concurrency)"
 
 DATASET_SLUG="${DATASET//\//-}"
 MATRIX_ID="${DATASET_SLUG}--k${N_ATTEMPTS}"
@@ -167,13 +154,10 @@ mkdir -p "$STATE_DIR"
 touch "$STATUS_FILE"
 
 log() {
-  # Timestamped, unbuffered, and duplicated to stdout so both the driver log and
-  # the SSM-captured launch output show progress.
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$MATRIX_LOG"
 }
 
 cell_status() {
-  # Last recorded status for a cell, or empty if never run.
   awk -F'\t' -v c="$1" '$2 == c {s = $3} END {print s}' "$STATUS_FILE"
 }
 
@@ -184,14 +168,18 @@ record() {
 
 IFS=',' read -r -a MODEL_LIST <<<"$MODELS"
 
-log "=== Matrix start ==="
-log "  Matrix ID:   ${MATRIX_ID}"
-log "  Dataset:     ${DATASET}"
-log "  Attempts:    k=${N_ATTEMPTS}"
-log "  Agent:       ${AGENT}"
-log "  Models:      ${MODELS}"
-log "  Concurrency: ${RESOLVED_CONCURRENCY} nodes ($((RESOLVED_CONCURRENCY * VCPU_PER_NODE)) vCPU peak, one model at a time)"
-log "  State dir:   ${STATE_DIR}"
+log "=== Matrix start: ${MATRIX_ID} ==="
+log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
+log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per model"
+log "  Agent:    ${AGENT}"
+log "  Models:   ${MODELS}"
+log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one model at a time"
+for m in "${MODEL_LIST[@]}"; do
+  m="$(echo "$m" | tr -d '[:space:]')"
+  [ -z "$m" ] && continue
+  log "    ${m}: $(cell_concurrency "$m") concurrent trials"
+done
+log "  State:    ${STATE_DIR}"
 
 rm -f "${STATE_DIR}/COMPLETE"
 
@@ -203,40 +191,44 @@ for MODEL in "${MODEL_LIST[@]}"; do
   MODEL="$(echo "$MODEL" | tr -d '[:space:]')"
   [ -z "$MODEL" ] && continue
 
-  PRIOR="$(cell_status "$MODEL")"
-  if [ "$PRIOR" = "OK" ]; then
-    log "SKIP ${MODEL} — already completed in this matrix (status.tsv)"
+  if [ "$(cell_status "$MODEL")" = "OK" ]; then
+    log "SKIP ${MODEL} — already completed in this matrix"
     SKIPPED+=("$MODEL")
     continue
   fi
 
+  CELL_CONCURRENCY="$(cell_concurrency "$MODEL")"
   CELL_LOG="${STATE_DIR}/${MODEL}.log"
-  log "RUN  ${MODEL} → ${CELL_LOG}"
-  record "$MODEL" "RUNNING" ""
+  log "RUN  ${MODEL} at -n ${CELL_CONCURRENCY} → ${CELL_LOG}"
+  record "$MODEL" "RUNNING" "n=${CELL_CONCURRENCY}"
 
-  # Block until the region has enough vCPU headroom for this cell. Checking the
-  # quota (rather than just "are any fleet nodes alive") means an unrelated run
-  # in this account delays us instead of being ignored or, worse, killed.
-  NEEDED_VCPU=$((RESOLVED_CONCURRENCY * VCPU_PER_NODE))
-  for _ in $(seq 1 240); do
-    HEADROOM=$(vcpu_headroom)
-    [ "${HEADROOM:-0}" -ge "$NEEDED_VCPU" ] && break
-    log "     waiting for vCPU headroom: have ${HEADROOM}, need ${NEEDED_VCPU}"
+  # Wait for EC2 room under the ceiling. Measuring real usage (not just our own
+  # nodes) means an unrelated run delays us instead of being ignored or killed.
+  # Bounded so a permanently-busy account can't hang the matrix overnight.
+  NEEDED_VCPU=$((CELL_CONCURRENCY * VCPU_PER_NODE))
+  for i in $(seq 1 240); do
+    IN_USE=$(fleet_vcpu_in_use)
+    [ $((IN_USE + NEEDED_VCPU)) -le "$MAX_FLEET_VCPU" ] && break
+    if [ "$i" -eq 240 ]; then
+      log "     WARNING: ${IN_USE} vCPU still in use after 4h; proceeding anyway"
+      break
+    fi
+    log "     waiting for EC2 room: ${IN_USE} in use, need ${NEEDED_VCPU}, ceiling ${MAX_FLEET_VCPU}"
     sleep 60
   done
 
   START_EPOCH=$(date -u +%s)
 
-  # Each cell is a normal run-benchmark.sh invocation. JOB_NAME_SUFFIX keeps the
-  # pass@k results in their own job dir and S3 prefix.
+  # JOB_NAME_SUFFIX gives the pass@k run its own job dir and S3 prefix so it
+  # never archives or overwrites the k=1 baselines.
   JOB_NAME_SUFFIX="--k${N_ATTEMPTS}" \
   N_ATTEMPTS="$N_ATTEMPTS" \
     bash "${EVALS_DIR}/strands-infra-runner/run-benchmark.sh" \
-      "$AGENT" "$MODEL" "$DATASET" "$RESOLVED_CONCURRENCY" \
+      "$AGENT" "$MODEL" "$DATASET" "$CELL_CONCURRENCY" \
       </dev/null >"$CELL_LOG" 2>&1
   CELL_EXIT=$?
-
   ELAPSED=$(( $(date -u +%s) - START_EPOCH ))
+
   if [ "$CELL_EXIT" -eq 0 ]; then
     log "OK   ${MODEL} in ${ELAPSED}s"
     record "$MODEL" "OK" "${ELAPSED}s"
@@ -247,73 +239,59 @@ for MODEL in "${MODEL_LIST[@]}"; do
     FAILED+=("$MODEL")
   fi
 
-  # Belt-and-braces: terminate anything this cell's own cleanup handler missed,
-  # so a crashed cell cannot leak vCPU into the next one. Scoped by the
-  # harbor:job tag that run.py stamps on every node it launches — never a blanket
-  # sweep, which would kill instances belonging to someone else's run.
-  CELL_JOB_TAG="${AGENT}@*--${MODEL}--${DATASET_SLUG}--k${N_ATTEMPTS}"
+  # Terminate anything this cell's own cleanup missed, so a crashed cell can't
+  # leak instances into the next one. Scoped to this cell's harbor:job tag —
+  # never a blanket sweep, which would kill instances from another run.
   ORPHANS=$(aws ec2 describe-instances --region us-east-1 \
     --filters Name=instance-state-name,Values=running,pending \
               Name=key-name,Values=harbor-benchmark \
-              "Name=tag:harbor:job,Values=${CELL_JOB_TAG}" \
+              "Name=tag:harbor:job,Values=${AGENT}@*--${MODEL}--${DATASET_SLUG}--k${N_ATTEMPTS}" \
     --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true)
   if [ -n "${ORPHANS// /}" ]; then
-    log "     terminating orphan fleet instances for this cell: ${ORPHANS}"
+    log "     terminating orphans for this cell: ${ORPHANS}"
     aws ec2 terminate-instances --region us-east-1 --instance-ids $ORPHANS >/dev/null 2>&1 || true
   fi
 done
 
-log "=== Matrix complete ==="
+log "=== Matrix complete: ${MATRIX_ID} ==="
 log "  OK:      ${#SUCCEEDED[@]} (${SUCCEEDED[*]:-none})"
 log "  FAILED:  ${#FAILED[@]} (${FAILED[*]:-none})"
 log "  SKIPPED: ${#SKIPPED[@]} (${SKIPPED[*]:-none})"
 
-# Final S3 sync so results are durable even if the 5-minute mirror cron is behind.
-log "Final S3 mirror sync..."
+# Final sync so results are durable even if the 5-minute mirror cron is behind.
 aws s3 sync /home/ubuntu/evals/jobs/ s3://strands-benchmark-results-mirror/jobs/ \
   --region us-east-1 --only-show-errors 2>&1 | tee -a "$MATRIX_LOG"
 
-# Scoreboard across every cell that produced a result.json.
-log "=== Scoreboard ==="
-python3 - "$MATRIX_ID" "$N_ATTEMPTS" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
+# One line per cell so you can see at a glance that results landed. Per-source
+# and equal-weighted metrics are computed by the job's metric plugin and live in
+# each job's result.json / the viewer.
+for MODEL in "${MODEL_LIST[@]}"; do
+  MODEL="$(echo "$MODEL" | tr -d '[:space:]')"
+  [ -z "$MODEL" ] && continue
+  python3 - "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
 import glob
 import json
-import os
 import sys
 
-matrix_id, n_attempts = sys.argv[1:]
-suffix = f"--k{n_attempts}"
-rows = []
-for path in sorted(glob.glob(f"/home/ubuntu/evals/jobs/*{suffix}/result.json")):
-    job = os.path.basename(os.path.dirname(path))
-    if matrix_id.rsplit("--k", 1)[0] not in job:
-        continue
-    try:
-        with open(path) as fh:
-            result = json.load(fh)
-    except Exception as exc:
-        rows.append((job, f"unreadable result.json: {exc}"))
-        continue
-    stats = result.get("stats") or {}
-    for evals_key, evals in (stats.get("evals") or {}).items():
-        merged = {}
-        for metric in evals.get("metrics") or []:
-            merged.update(metric)
-        pak = evals.get("pass_at_k") or {}
-        rows.append(
-            (
-                job,
-                f"n={evals.get('n_trials')} errors={evals.get('n_errors')} "
-                f"mean={merged.get('mean')} equal_weighted={merged.get('equal_weighted_mean')} "
-                f"pass@k={ {k: round(v, 4) for k, v in sorted(pak.items())} }",
-            )
-        )
-
-if not rows:
-    print("  (no result.json files found)")
-for job, line in rows:
-    print(f"  {job}\n      {line}")
+model, dataset_slug, k = sys.argv[1:]
+paths = glob.glob(f"/home/ubuntu/evals/jobs/*--{model}--{dataset_slug}--k{k}/result.json")
+if not paths:
+    print(f"  {model}: no result.json")
+    sys.exit()
+with open(paths[0]) as fh:
+    stats = (json.load(fh).get("stats") or {})
+for key, ev in (stats.get("evals") or {}).items():
+    merged = {}
+    for m in ev.get("metrics") or []:
+        merged.update(m)
+    pak = {kk: round(vv, 4) for kk, vv in sorted((ev.get("pass_at_k") or {}).items())}
+    print(
+        f"  {model}: n={ev.get('n_trials')} errors={ev.get('n_errors')} "
+        f"mean={merged.get('mean')} equal_weighted={merged.get('equal_weighted_mean')} "
+        f"pass@k={pak or '(none)'}"
+    )
 PY
+done
 
 date -u +%Y-%m-%dT%H:%M:%SZ >"${STATE_DIR}/COMPLETE"
 log "Wrote ${STATE_DIR}/COMPLETE"

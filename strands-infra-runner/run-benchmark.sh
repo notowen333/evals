@@ -113,16 +113,35 @@ if [[ "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then
     exit 1
   fi
 
+  # Expected task count comes from the adapter's own metadata, not a literal, so
+  # the index can grow (206 -> ~250) without editing this launcher. A mismatch
+  # still hard-fails: it means the materialized dataset is stale or partial.
+  EXPECTED_TASKS=$(python3 -c "
+import json
+try:
+    with open('${METRIC_PLUGIN_DIR}/adapter_metadata.json') as fh:
+        meta = json.load(fh)
+    print(meta[0]['harbor_adapter'][0]['adapted_benchmark_size'])
+except Exception:
+    print('')
+" 2>/dev/null)
+
   MATERIALIZED_TASKS=$(find "$DATASET_PATH" -mindepth 2 -maxdepth 2 -name task.toml | wc -l)
-  if [ "$MATERIALIZED_TASKS" -ne 206 ]; then
-    echo "ERROR: Expected 206 custom benchmark tasks, found ${MATERIALIZED_TASKS}" >&2
+  MATERIALIZED_TASKS=$(echo "$MATERIALIZED_TASKS" | tr -d ' ')
+
+  if [ -z "$EXPECTED_TASKS" ]; then
+    echo "ERROR: Could not read adapted_benchmark_size from ${METRIC_PLUGIN_DIR}/adapter_metadata.json" >&2
+    exit 1
+  fi
+  if [ "$MATERIALIZED_TASKS" -ne "$EXPECTED_TASKS" ]; then
+    echo "ERROR: Expected ${EXPECTED_TASKS} custom benchmark tasks (per adapter_metadata.json), found ${MATERIALIZED_TASKS}" >&2
     echo "  Re-run: bash strands-infra-runner/setup-strands-harness-benchmark.sh" >&2
     exit 1
   fi
 
   export PYTHONPATH="${METRIC_PLUGIN_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
   export JOB_PLUGIN="metric_plugin:StrandsHarnessBenchmarkMetricPlugin"
-  echo "  Local dataset: ${DATASET_PATH} (${MATERIALIZED_TASKS} tasks)"
+  echo "  Local dataset: ${DATASET_PATH} (${MATERIALIZED_TASKS}/${EXPECTED_TASKS} tasks)"
   echo "  Metric plugin: ${JOB_PLUGIN}"
 fi
 
