@@ -93,6 +93,11 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 JOB_NAME = os.environ.get("JOB_NAME", "ec2-fleet")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "jobs/ec2-fleet")
 N_TASKS = os.environ.get("N_TASKS")  # optional: cap number of tasks (for testing)
+TASK_NAMES = [
+    name.strip()
+    for name in os.environ.get("TASK_NAMES", "").split(",")
+    if name.strip()
+]
 # Optional: attach an IAM instance profile (name or ARN) to each fleet instance.
 # When set, the instance's role provides AWS access (auto-refreshing), so we skip
 # forwarding the orchestrator's credentials as env vars. The role needs only
@@ -135,6 +140,7 @@ sys.argv = [
     *(("-p", DATASET_PATH) if DATASET_PATH else ("-d", DATASET)),
     *(("--plugin", JOB_PLUGIN) if JOB_PLUGIN else ()),
     "-n", CONCURRENCY,
+    *[arg for name in TASK_NAMES for arg in ("-i", name)],
     *(["-l", N_TASKS] if N_TASKS else []),
     "-e", "ec2",
     "--ek", f"region={REGION}",
