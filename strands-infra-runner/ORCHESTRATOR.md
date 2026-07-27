@@ -154,13 +154,48 @@ aws ssm send-command ... --parameters '{"commands":["aws ec2 describe-instances 
 The Stan agent is installed directly from the private repo via a GitHub
 PAT stored in Secrets Manager (`stan_pat-lUflBx`). No manual sync or scp needed.
 
-- `STAN_BRANCH` env var controls which branch to install (default: `main`).
+- `STAN_BRANCH` env var controls which ref to install (default: `main`). It
+  accepts a branch, a tag, or a full/short commit SHA.
 - The PAT is fetched at run time by `run-benchmark.sh`.
 - `strands-agents>=1.45.0` is passed as `AGENT_DEPS` so the fleet containers
   install the correct SDK version.
 
 To cut a new Stan version for benchmarking, just tag/branch in the Stan repo and
 pass `STAN_BRANCH=<ref>` when launching the run.
+
+`VERSION_TAG` (the `@<sha>` in the job name) is derived from `STAN_BRANCH`. When
+it's a branch/tag, the SHA comes from `git ls-remote`; when it's already a SHA,
+it's used directly — `ls-remote` matches refs only and returns nothing for a raw
+commit, so it cannot be used to resolve or validate one.
+
+## Matrix runs (pass@k across models)
+
+`run-matrix.sh` launches the model matrix sequentially and unattended. Models run
+one at a time, so peak fleet size is one cell regardless of `k` or model count;
+per-cell concurrency is additionally capped per model to limit Bedrock throttling.
+
+```bash
+setsid bash strands-infra-runner/run-matrix.sh -k 2 \
+  </dev/null >/home/ubuntu/matrix-k2.log 2>&1 &
+```
+
+| Flag | Purpose | Default |
+|------|---------|---------|
+| `-d` | Dataset | `strands-harness-benchmark-index` |
+| `-k` | Attempts per task (pass@k) | `2` |
+| `-m` | Comma-separated models | the five with k=1 baselines |
+| `-n` | Force per-cell concurrency | per-model cap |
+| `-a` | Agent | `stan` |
+| `-s` | Stan ref to pin: branch, tag, or SHA | `STAN_BRANCH`, else `main` HEAD |
+
+The Stan SHA is resolved **once** and handed to every cell, so a push to Stan
+mid-matrix can't give later models a different agent build than earlier ones. A
+pinned SHA is validated against the GitHub API during preflight.
+
+State lives in `/home/ubuntu/matrix-runs/<dataset-slug>--k<N>/` (`matrix.log`,
+`status.tsv`, `<model>.log`, `COMPLETE`). Re-running with the same `-d`/`-k`
+skips cells already marked `OK`. Job dirs and S3 prefixes get a `--k<N>` suffix
+so pass@k never overwrites the k=1 baselines.
 
 ## TAU3 simulated user setup
 
