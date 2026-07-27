@@ -428,10 +428,22 @@ for MODEL in "${MODEL_LIST[@]}"; do
   # never archives or overwrites the k=1 baselines.
   # STAN_BRANCH is the pinned SHA (not a branch name) so every cell installs the
   # identical agent build; VERSION_TAG keeps job dirs tagged with that SHA.
-  JOB_NAME_SUFFIX="--k${N_ATTEMPTS}" \
-  N_ATTEMPTS="$N_ATTEMPTS" \
-  ${PINNED_STAN_SHA:+STAN_BRANCH="$PINNED_STAN_SHA"} \
-  ${PINNED_STAN_SHA:+VERSION_TAG="${PINNED_STAN_SHA:0:7}"} \
+  #
+  # Built as an array and passed to `env` rather than as `${VAR:+NAME=val}` command
+  # prefixes: bash decides which words are assignments BEFORE expanding them, so an
+  # expansion that yields "NAME=val" is run as a command (exit 127), not assigned.
+  CELL_ENV=(
+    "JOB_NAME_SUFFIX=--k${N_ATTEMPTS}"
+    "N_ATTEMPTS=${N_ATTEMPTS}"
+  )
+  if [ -n "$PINNED_STAN_SHA" ]; then
+    CELL_ENV+=(
+      "STAN_BRANCH=${PINNED_STAN_SHA}"
+      "VERSION_TAG=${PINNED_STAN_SHA:0:7}"
+    )
+  fi
+
+  env "${CELL_ENV[@]}" \
     bash "${EVALS_DIR}/strands-infra-runner/run-benchmark.sh" \
       "$AGENT" "$MODEL" "$DATASET" "$CELL_CONCURRENCY" \
       </dev/null >"$CELL_LOG" 2>&1
