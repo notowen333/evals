@@ -12,11 +12,14 @@
 #
 # Usage:
 #   run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]
+#                 [-s stan-ref]
 #
 # Examples:
 #   run-matrix.sh                                  # 5-model matrix at pass@2
 #   run-matrix.sh -k 4                             # same matrix at pass@4
 #   run-matrix.sh -m opus-4.8,sonnet-4.6 -k 2      # just two models
+#   run-matrix.sh -s 45fed43                       # pin an exact Stan commit
+#   run-matrix.sh -s my-feature-branch             # or a branch/tag
 #
 # State/logs (tail these):
 #   <state>/matrix.log    driver log — one line per cell start/finish
@@ -37,6 +40,9 @@ DATASET="strands-harness-benchmark-index"
 N_ATTEMPTS=2
 AGENT="stan"
 CONCURRENCY=""
+# Stan ref to pin: a branch, tag, or full/short commit SHA. Defaults to
+# STAN_BRANCH, else main's current HEAD. Resolved once for the whole matrix.
+STAN_REF_OVERRIDE="${STAN_REF_OVERRIDE:-}"
 
 # The five models with full k=1 baselines on the index.
 DEFAULT_MODELS="opus-4.8,openai.gpt-5.6-sol,sonnet-5,openai.zai.glm-5,kimi-k2.5"
@@ -63,14 +69,15 @@ model_token_cap() {
   esac
 }
 
-while getopts "d:k:m:n:a:" opt; do
+while getopts "d:k:m:n:a:s:" opt; do
   case "$opt" in
     d) DATASET="$OPTARG" ;;
     k) N_ATTEMPTS="$OPTARG" ;;
     m) MODELS="$OPTARG" ;;
     n) CONCURRENCY="$OPTARG" ;;
     a) AGENT="$OPTARG" ;;
-    *) echo "Usage: run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]" >&2; exit 2 ;;
+    s) STAN_REF_OVERRIDE="$OPTARG" ;;
+    *) echo "Usage: run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent] [-s stan-ref]" >&2; exit 2 ;;
   esac
 done
 MODELS="${MODELS:-$DEFAULT_MODELS}"
@@ -112,7 +119,16 @@ TASK_COUNT="$(dataset_task_count)"
 # different agent version than earlier ones, making the comparison invalid.
 # Resolve the SHA once here and hand every cell that exact commit.
 pin_stan_commit() {
-  local pat ref="${STAN_BRANCH:-main}"
+  local ref="${STAN_REF_OVERRIDE:-${STAN_BRANCH:-main}}"
+
+  # Already a SHA: use it as-is. `git ls-remote` matches refs only and returns
+  # nothing for a raw commit, so resolving it would spuriously "fail".
+  if [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]]; then
+    echo "$ref"
+    return 0
+  fi
+
+  local pat
   pat=$(python3 -c "
 import json, boto3
 c = boto3.client('secretsmanager', region_name='us-east-1')
@@ -123,11 +139,12 @@ print(json.loads(s['SecretString'])['stan_pat'])
     | awk '{print $1}' | head -1
 }
 
+STAN_REF="${STAN_REF_OVERRIDE:-${STAN_BRANCH:-main}}"
 PINNED_STAN_SHA=""
 if [[ "$AGENT" == stan* ]]; then
   PINNED_STAN_SHA="$(pin_stan_commit)"
   if [ -z "$PINNED_STAN_SHA" ]; then
-    echo "ERROR: Could not resolve Stan commit for ref '${STAN_BRANCH:-main}'." >&2
+    echo "ERROR: Could not resolve Stan commit for ref '${STAN_REF}'." >&2
     echo "  Refusing to start: cells would each resolve their own SHA and the" >&2
     echo "  matrix would not be internally comparable." >&2
     exit 1
@@ -199,7 +216,7 @@ IFS=',' read -r -a MODEL_LIST <<<"$MODELS"
 log "=== Matrix start: ${MATRIX_ID} ==="
 log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
 log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per model"
-log "  Agent:    ${AGENT}${PINNED_STAN_SHA:+ @ ${PINNED_STAN_SHA:0:7} (pinned for all cells)}"
+log "  Agent:    ${AGENT}${PINNED_STAN_SHA:+ @ ${PINNED_STAN_SHA:0:7} (from '${STAN_REF}', pinned for all cells)}"
 log "  Models:   ${MODELS}"
 log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one model at a time"
 for m in "${MODEL_LIST[@]}"; do
@@ -257,6 +274,40 @@ except Exception:
     if [ ! -f "${adapter}/metric_plugin.py" ]; then
       echo "PREFLIGHT FAIL: metric plugin missing at ${adapter}/metric_plugin.py" >&2
       fail=1
+    fi
+  fi
+
+  # A pinned SHA that doesn't exist in the Stan remote fails at `pip install` in
+  # every cell. `git ls-remote` can't validate a raw SHA, so ask the GitHub API.
+  if [ -n "$PINNED_STAN_SHA" ]; then
+    if ! STAN_SHA="$PINNED_STAN_SHA" python3 - <<'PY'
+import json
+import os
+import urllib.error
+import urllib.request
+
+import boto3
+
+sha = os.environ["STAN_SHA"]
+secret = boto3.client("secretsmanager", region_name="us-east-1").get_secret_value(
+    SecretId="arn:aws:secretsmanager:us-east-1:879381280403:secret:stan_pat-lUflBx"
+)
+pat = json.loads(secret["SecretString"])["stan_pat"]
+req = urllib.request.Request(
+    f"https://api.github.com/repos/awsarron/stan/commits/{sha}",
+    headers={"Authorization": f"Bearer {pat}", "Accept": "application/vnd.github+json"},
+)
+try:
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        json.load(resp)
+except urllib.error.HTTPError as exc:
+    raise SystemExit(f"  github says {exc.code} for commit {sha}")
+PY
+    then
+      echo "PREFLIGHT FAIL: Stan commit '${PINNED_STAN_SHA}' not found in awsarron/stan" >&2
+      fail=1
+    else
+      log "  preflight: Stan commit ${PINNED_STAN_SHA:0:7} exists in remote OK"
     fi
   fi
 

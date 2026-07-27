@@ -227,13 +227,20 @@ print(json.loads(secret['SecretString'])['stan_pat'])
   # which can be stale from cached installs).
   if [ -z "${VERSION_TAG:-}" ]; then
     STAN_REF="${STAN_BRANCH:-main}"
-    VERSION_TAG=$(git ls-remote "https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git" "${STAN_REF}" | cut -c1-7)
-    if [ -z "$VERSION_TAG" ]; then
-      echo "ERROR: Could not resolve Stan commit for ref '${STAN_REF}'" >&2
-      echo "  Check network access to github.com/awsarron/stan.git" >&2
-      exit 1
+    if [[ "$STAN_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
+      # STAN_BRANCH is already a commit SHA. `git ls-remote` only matches refs
+      # (branches/tags) and returns nothing for a raw SHA, so use it directly.
+      VERSION_TAG="${STAN_REF:0:7}"
+      echo "  Stan commit: ${VERSION_TAG} (pinned via STAN_BRANCH)"
+    else
+      VERSION_TAG=$(git ls-remote "https://x-access-token:${STAN_PAT}@github.com/awsarron/stan.git" "${STAN_REF}" | cut -c1-7)
+      if [ -z "$VERSION_TAG" ]; then
+        echo "ERROR: Could not resolve Stan commit for ref '${STAN_REF}'" >&2
+        echo "  Check network access to github.com/awsarron/stan.git" >&2
+        exit 1
+      fi
+      echo "  Stan commit: ${VERSION_TAG} (from git ls-remote ${STAN_REF})"
     fi
-    echo "  Stan commit: ${VERSION_TAG} (from git ls-remote ${STAN_REF})"
     # Rebuild job name with the derived tag
     JOB_NAME="${AGENT}@${VERSION_TAG}--${MODEL}--${DATASET_SLUG}${JOB_SUFFIX}"
   fi
