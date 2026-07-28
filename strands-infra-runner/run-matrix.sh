@@ -1,14 +1,16 @@
 #!/bin/bash
 # run-matrix.sh — Fire-and-forget pass@k matrix launcher.
 #
-# Launches the model matrix against a dataset and walks away. Two concurrency
-# limits are respected:
+# Launches the model matrix against a dataset and walks away.
 #
-#   EC2:   models run SEQUENTIALLY, so peak fleet size is one cell's worth of
-#          instances no matter how many models or how large k is.
-#   Tokens: per-cell concurrency is capped per model (see MODEL_CONCURRENCY),
-#          because Bedrock throttling — not EC2 — was the largest error class in
-#          the k=1 baselines (sonnet-5: 53/206 ApiRateLimitError).
+# Each cell runs at full width — one EC2 node per trial (tasks x k) — bounded only
+# by the fleet vCPU ceiling and Harbor's SSH/FD limit. Models still run
+# SEQUENTIALLY, so peak fleet size is one cell's worth of instances no matter how
+# many models or how large k is.
+#
+# Per-model token caps are available but empty by default: the k=2 matrix showed
+# 1 ApiRateLimitError in 2060 trials, so endpoint throttling is not the binding
+# constraint. See model_token_cap() before adding one back.
 #
 # Usage:
 #   run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]
@@ -50,22 +52,30 @@ MODELS=""
 
 # --- Token-concurrency caps (nodes) --------------------------------------
 # Max concurrent trials per model, i.e. max in-flight requests to that endpoint.
-# Anything not listed uses DEFAULT_MODEL_CONCURRENCY. Lower = fewer
-# ApiRateLimitErrors, longer wall clock. Tuned from the k=1 baseline error rates:
-#   sonnet-5     53/206 throttled at ~206 concurrent → cap hard
-#   glm-5/kimi   mantle + moonshot, moderate error rates → cap moderately
-#   opus/gpt-sol 8 and 28 errors, mostly not throttling → run wide
-DEFAULT_MODEL_CONCURRENCY=120
+#
+# These were originally cut to 80-100 for sonnet-5/glm-5/kimi on the theory that
+# Bedrock throttling was the dominant error class (53/206 ApiRateLimitError in the
+# k=1 baselines). The k=2 matrix (2026-07-27, 2060 trials) disproved that:
+#
+#   ApiRateLimitError:        1 trial in 2060
+#   retries:                  0-3 per model
+#   error classes observed:   NonZeroAgentExitCode (262), AgentTimeout (115)
+#
+# Both remaining classes are agent-side and do NOT scale with concurrency, so the
+# caps bought nothing and cost ~2.1h of a 6.4h matrix. The 429s that do appear in
+# the logs are the agent's own web tools hitting external sites (Brave, Semantic
+# Scholar), not Bedrock — throttling those by shrinking the fleet is pointless.
+#
+# Default is now "no per-model cap": the real ceilings are MAX_FLEET_NODES and
+# Harbor's SSH/FD limit. Add an entry here only with evidence of endpoint-side
+# throttling for that model, and note the run it came from.
+DEFAULT_MODEL_CONCURRENCY=100000
 
 model_token_cap() {
   case "$1" in
-    opus-4.8|opus)          echo 206 ;;  # 8/206 errors at full width — run wide
-    openai.gpt-5.6-sol)     echo 206 ;;  # 28/206, mostly stream drops not 429s
-    sonnet-5)               echo 80  ;;  # 53/206 throttled — cap hard
-    sonnet-4.6|sonnet)      echo 120 ;;
-    openai.zai.glm-5)       echo 100 ;;  # mantle proxy, moderate error rate
-    kimi-k2.5|kimi)         echo 100 ;;
-    *)                      echo "$DEFAULT_MODEL_CONCURRENCY" ;;
+    # No models currently need a token cap. Example of an evidence-backed entry:
+    #   some-model)  echo 80 ;;  # <N>/<total> ApiRateLimitError in <run>
+    *) echo "$DEFAULT_MODEL_CONCURRENCY" ;;
   esac
 }
 
@@ -83,9 +93,11 @@ done
 MODELS="${MODELS:-$DEFAULT_MODELS}"
 
 # --- EC2 ceiling ---------------------------------------------------------
-# Static on purpose: a full wave of the 206-task index is 824 vCPU, well under
-# the account's 9216 vCPU On-Demand Standard quota, so EC2 headroom is not the
-# binding constraint and a quota API lookup would only add a silent failure mode.
+# Static on purpose: the account's On-Demand Standard quota is 9216 vCPU in
+# us-east-1, so this 2048 is a self-imposed budget, not a hard limit — a quota API
+# lookup would only add a silent failure mode. Raise MAX_FLEET_VCPU to go wider:
+# the 206-task index at k=2 is 412 trials = 1648 vCPU (fits); at k=4 it is 824
+# trials = 3296 vCPU, which this ceiling clamps to 500 nodes.
 VCPU_PER_NODE=4
 MAX_FLEET_VCPU="${MAX_FLEET_VCPU:-2048}"
 MAX_FLEET_NODES=$((MAX_FLEET_VCPU / VCPU_PER_NODE))
@@ -151,8 +163,12 @@ if [[ "$AGENT" == stan* ]]; then
   fi
 fi
 
-# Concurrency for one cell: never more than there are tasks, never above this
-# model's token cap, never above the EC2 ceiling or Harbor's SSH/FD limit.
+# Concurrency for one cell. The unit is TRIALS, not tasks: at k=2 Harbor schedules
+# 412 independent trials for 206 tasks (verified — 412 trial dirs on disk), so
+# capping at TASK_COUNT would leave half the work queued behind the first wave.
+#
+# Bounded by, in order: total trials in the cell, this model's token cap (none by
+# default, see above), the EC2 vCPU ceiling, and 500 for Harbor's SSH/FD limit.
 cell_concurrency() {
   local model="$1"
   if [ -n "$CONCURRENCY" ]; then
@@ -161,7 +177,7 @@ cell_concurrency() {
   fi
   local cap
   cap="$(model_token_cap "$model")"
-  python3 -c "print(max(1, min(${TASK_COUNT}, ${cap}, ${MAX_FLEET_NODES}, 500)))"
+  python3 -c "print(max(1, min(${TASK_COUNT} * ${N_ATTEMPTS}, ${cap}, ${MAX_FLEET_NODES}, 500)))"
 }
 
 # vCPU currently consumed by running/pending instances in the region.
