@@ -360,7 +360,9 @@ for agent in "${AGENT_LIST[@]}"; do
   esac
 done
 AGENT_STATE_ID="$(IFS=+; echo "${AGENT_STATE_PARTS[*]}")"
-MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
+MODEL_STATE_ID="$(IFS=+; echo "${MODEL_LIST[*]}")"
+MODEL_STATE_ID="${MODEL_STATE_ID//\//-}"
+MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--models-${MODEL_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 STATE_DIR="${STATE_ROOT}/${MATRIX_ID}"
 MATRIX_LOG="${STATE_DIR}/matrix.log"
 STATUS_FILE="${STATE_DIR}/status.tsv"

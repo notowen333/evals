@@ -237,9 +237,12 @@ setsid bash strands-infra-runner/run-full-native-suite.sh \
 
 The default queue runs Claude Code and OpenCode on Opus 4.8, Sonnet 5, and
 Sonnet 4.6 across full TB21 (89), GAIA (165), TAU3 (375), and SWE-bench Pro
-(731). At pass@2 this is 24 sequential cells and 16,320 trials. Cells alternate
-Claude Code/OpenCode, each source writes a checkpoint, and exact completed
-results are reused on restart. The driver resolves the latest
+(731). At pass@2 this is 24 cells and 16,320 trials. Sources run sequentially.
+Within each source, one lane per model starts seven minutes apart; Claude Code
+and OpenCode run sequentially inside each lane so the same model endpoint is
+never used by two cells at once. The three lanes share a 9,216-vCPU fleet
+ceiling. Each source writes a checkpoint, and exact completed results are reused
+on restart. The driver resolves the latest
 `strands-working-fork` commit once, installs and verifies that exact SHA for
 every cell, and includes it in job identities.
 

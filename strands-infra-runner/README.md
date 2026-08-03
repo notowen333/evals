@@ -249,9 +249,11 @@ setsid bash strands-infra-runner/run-full-native-suite.sh \
 
 The default is Claude Code plus OpenCode, Opus 4.8 plus Sonnet 5 plus Sonnet
 4.6, and pass@2 over full TB21, GAIA, TAU3, and SWE-bench Pro. That produces
-24 sequential cells and 16,320 trials. The queue alternates agents, validates
-completed results before reuse, checkpoints each source, paces EC2 launches at
-1.5 requests/sec with burst 3, drains each cell fleet, and waits 60 seconds
-before launching the next cell. It resolves the freshest `strands-working-fork`
-commit once, verifies that exact SHA after every install, and records the short
-SHA in every job identity.
+24 cells and 16,320 trials. Sources run sequentially, while the three model
+lanes start seven minutes apart. Claude Code and OpenCode remain sequential
+inside each model lane, avoiding concurrent pressure on the same model endpoint.
+The queue validates completed results before reuse, checkpoints each source,
+paces each lane's initial EC2 launches at 1.5 requests/sec with burst 3, and
+drains each cell fleet. It resolves the freshest `strands-working-fork` commit
+once, verifies that exact SHA after every install, and records the short SHA in
+every job identity.

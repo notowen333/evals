@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -235,7 +236,7 @@ def test_native_matrix_creates_independent_agent_cells() -> None:
 
     assert result.returncode == 0, result.stderr
     assert (
-        "matrix_id=strands-harness-benchmark-index--agents-claude-code@2.1.220+opencode@1.18.9--harbor-strands--k2"
+        "matrix_id=strands-harness-benchmark-index--agents-claude-code@2.1.220+opencode@1.18.9--models-sonnet-4.6--harbor-strands--k2"
     ) in result.stdout
     assert "cell=claude-code\tsonnet-4.6\t412" in result.stdout
     assert "cell=opencode\tsonnet-4.6\t412" in result.stdout
@@ -313,6 +314,12 @@ def test_full_native_suite_plans_all_sources_and_trials() -> None:
     assert "total_cells=24" in result.stdout
     assert "total_trials=16320" in result.stdout
     assert "harbor_ref=strands-working-fork" in result.stdout
+    assert "parallel_models=1" in result.stdout
+    assert "model_stagger_seconds=420" in result.stdout
+    assert "parallel_fleet_vcpu=9216" in result.stdout
+    assert "lane=opus-4.8\tstart_delay_seconds=0" in result.stdout
+    assert "lane=sonnet-5\tstart_delay_seconds=420" in result.stdout
+    assert "lane=sonnet-4.6\tstart_delay_seconds=840" in result.stdout
 
     cells = [
         tuple(line.removeprefix("cell=").split("\t")[:4])
@@ -330,6 +337,56 @@ def test_full_native_suite_plans_all_sources_and_trials() -> None:
     ]
     assert {cell[3] for cell in cells if cell[0] == "gaia"} == {"330"}
     assert {cell[3] for cell in cells if cell[0] in {"tau3", "swe-bench-pro"}} == {"500"}
+
+
+def test_full_native_suite_runs_one_lane_per_source_and_model(
+    tmp_path: Path,
+) -> None:
+    invocation_log = tmp_path / "matrix-invocations.log"
+    fake_matrix = tmp_path / "fake-matrix.sh"
+    fake_matrix.write_text(
+        '#!/bin/bash\nprintf "%s\\n" "$*" >>"$MATRIX_INVOCATION_LOG"\n'
+    )
+    fake_matrix.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(FULL_SUITE_LAUNCHER)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "FULL_SUITE_STATE_ROOT": str(tmp_path / "state"),
+            "HARBOR_REF": "1234567890abcdef1234567890abcdef12345678",
+            "MATRIX_INVOCATION_LOG": str(invocation_log),
+            "MATRIX_RUNNER": str(fake_matrix),
+            "MODEL_STAGGER_SECONDS": "0",
+            "ORCHESTRATOR_EVALS_DIR": str(tmp_path / "runtime"),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    invocations = [shlex.split(line) for line in invocation_log.read_text().splitlines()]
+    assert len(invocations) == 12
+    observed = {
+        (args[args.index("-d") + 1], args[args.index("-m") + 1])
+        for args in invocations
+    }
+    assert observed == {
+        (dataset, model)
+        for dataset in (
+            "terminal-bench/terminal-bench-2-1",
+            "gaia/gaia",
+            "sierra-research/tau3-bench",
+            "scale-ai/swe-bench-pro",
+        )
+        for model in ("opus-4.8", "sonnet-5", "sonnet-4.6")
+    }
+
+    suite_state = next((tmp_path / "state").iterdir())
+    assert len(list((suite_state / "sources").glob("*.COMPLETE"))) == 4
+    assert (suite_state / "COMPLETE").is_file()
 
 
 def test_native_matrix_rejects_incompatible_claude_code_model() -> None:
