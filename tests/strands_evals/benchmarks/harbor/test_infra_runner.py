@@ -57,7 +57,11 @@ def _matrix_plan(*args: str, **overrides: str) -> subprocess.CompletedProcess[st
     )
 
 
-def _benchmark_plan(agent: str, model: str) -> subprocess.CompletedProcess[str]:
+def _benchmark_plan(
+    agent: str,
+    model: str,
+    **overrides: str,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
@@ -68,7 +72,7 @@ def _benchmark_plan(agent: str, model: str) -> subprocess.CompletedProcess[str]:
             "1",
         ],
         cwd=REPO_ROOT,
-        env={**os.environ, "BENCHMARK_DRY_RUN": "1"},
+        env={**os.environ, "BENCHMARK_DRY_RUN": "1", **overrides},
         check=False,
         capture_output=True,
         text=True,
@@ -365,3 +369,15 @@ def test_benchmark_launcher_derives_attempt_suffix() -> None:
     assert result.returncode == 0, result.stderr
     assert ("jobs/claude-code@2.1.220--sonnet-4.6--strands-harness-benchmark-index--k2") in result.stdout
     assert "Attempts:    2" in result.stdout
+
+
+def test_benchmark_launcher_separates_code_and_runtime_roots() -> None:
+    result = _benchmark_plan(
+        "claude-code",
+        "sonnet-4.6",
+        ORCHESTRATOR_EVALS_DIR="/home/ubuntu/evals",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"Code root:   {REPO_ROOT}" in result.stdout
+    assert "Runtime root: /home/ubuntu/evals" in result.stdout

@@ -36,6 +36,8 @@
 set -uo pipefail
 
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORCHESTRATOR_EVALS_DIR="${ORCHESTRATOR_EVALS_DIR:-$EVALS_DIR}"
+export ORCHESTRATOR_EVALS_DIR
 STATE_ROOT="${MATRIX_STATE_ROOT:-/home/ubuntu/matrix-runs}"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
 HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
@@ -631,7 +633,7 @@ terminate_and_drain_cell_fleet() {
 completed_job_path() {
   local agent="$1" model="$2" version pattern
   version="$(agent_version_tag "$agent")"
-  pattern="${EVALS_DIR}/jobs/${agent}${version:+@${version}}--${model}--${DATASET_SLUG}${JOB_SUFFIX}/result.json"
+  pattern="${ORCHESTRATOR_EVALS_DIR}/jobs/${agent}${version:+@${version}}--${model}--${DATASET_SLUG}${JOB_SUFFIX}/result.json"
   python3 - "$pattern" "$DATASET" "$TASK_COUNT" "$N_ATTEMPTS" <<'PY'
 import glob
 import json
@@ -759,7 +761,7 @@ log "  FAILED:  ${#FAILED[@]} (${FAILED[*]:-none})"
 log "  SKIPPED: ${#SKIPPED[@]} (${SKIPPED[*]:-none})"
 
 # Final sync so results are durable even if the 5-minute mirror cron is behind.
-aws s3 sync /home/ubuntu/evals/jobs/ s3://strands-benchmark-results-mirror/jobs/ \
+aws s3 sync "${ORCHESTRATOR_EVALS_DIR}/jobs/" s3://strands-benchmark-results-mirror/jobs/ \
   --region us-east-1 --only-show-errors 2>&1 | tee -a "$MATRIX_LOG"
 
 # One line per cell so you can see at a glance that results landed. Per-source
@@ -768,14 +770,14 @@ aws s3 sync /home/ubuntu/evals/jobs/ s3://strands-benchmark-results-mirror/jobs/
 for cell_index in "${!CELL_AGENTS[@]}"; do
     AGENT="${CELL_AGENTS[$cell_index]}"
     MODEL="${CELL_MODELS[$cell_index]}"
-    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" "$HARBOR_VERSION_TAG" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
+    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" "$HARBOR_VERSION_TAG" "$ORCHESTRATOR_EVALS_DIR" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
 import glob
 import json
 import sys
 
-agent, model, dataset_slug, k, harbor_version = sys.argv[1:]
+agent, model, dataset_slug, k, harbor_version, evals_dir = sys.argv[1:]
 paths = glob.glob(
-    f"/home/ubuntu/evals/jobs/{agent}@*--{model}--{dataset_slug}"
+    f"{evals_dir}/jobs/{agent}@*--{model}--{dataset_slug}"
     f"--harbor{harbor_version}--k{k}/result.json"
 )
 if not paths:

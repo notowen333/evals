@@ -19,6 +19,7 @@ MODEL="${2:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORCHESTRATOR_EVALS_DIR="${ORCHESTRATOR_EVALS_DIR:-/home/ubuntu/evals}"
 STRANDS_HARNESS_DATASET="strands-harness-benchmark-index"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
 HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
@@ -154,6 +155,8 @@ if [ -n "$OPENCODE_MANTLE_BASE_URL" ]; then
 fi
 echo "  Dataset:     $DATASET"
 echo "  Harbor ref:  $HARBOR_REF"
+echo "  Code root:   $EVALS_DIR"
+echo "  Runtime root: $ORCHESTRATOR_EVALS_DIR"
 echo "  Concurrency: $CONCURRENCY"
 echo "  Attempts:    ${N_ATTEMPTS:-1}"
 echo "  Instance:    $INSTANCE_TYPE"
@@ -169,7 +172,7 @@ fi
 # --- Setup ---
 export HOME=/root
 export PATH=/usr/local/bin:/usr/bin:/bin
-cd /home/ubuntu/evals
+cd "$ORCHESTRATOR_EVALS_DIR"
 source .venv/bin/activate
 
 if [[ "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then
@@ -415,7 +418,7 @@ export STRANDS_MODEL="$MODEL_ID"
 # partial results are preserved. `set -e`/`pipefail` would otherwise kill us here,
 # and `$?` after a pipe reports tee's status, not the runner's.
 set +e
-python strands-infra-runner/run.py 2>&1 | tee "$LOG_FILE"
+python "${EVALS_DIR}/strands-infra-runner/run.py" 2>&1 | tee "$LOG_FILE"
 RUN_EXIT=${PIPESTATUS[0]}
 set -e
 
