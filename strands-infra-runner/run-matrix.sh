@@ -660,20 +660,37 @@ expected_tasks, k = int(expected_tasks), int(k)
 for path in sorted(glob.glob(pattern), reverse=True):
     try:
         with open(path) as fh:
-            trials = json.load(fh).get("trial_results") or []
+            result = json.load(fh)
     except (OSError, json.JSONDecodeError):
         continue
+
+    trials = result.get("trial_results") or []
     counts = Counter(
         trial.get("task_name")
         for trial in trials
         if trial.get("source") == dataset and trial.get("task_name")
     )
     has_clean_trial = any(trial.get("exception_info") is None for trial in trials)
-    if (
+    legacy_complete = (
         len(counts) == expected_tasks
         and set(counts.values()) == {k}
         and has_clean_trial
-    ):
+    )
+
+    expected_trials = expected_tasks * k
+    stats = result.get("stats") or {}
+    evals = stats.get("evals") or {}
+    summary_complete = (
+        result.get("finished_at") is not None
+        and result.get("n_total_trials") == expected_trials
+        and stats.get("n_completed_trials") == expected_trials
+        and stats.get("n_running_trials", 0) == 0
+        and stats.get("n_pending_trials", 0) == 0
+        and stats.get("n_errored_trials", expected_trials) < expected_trials
+        and any(name.endswith(f"__{dataset}") for name in evals)
+    )
+
+    if legacy_complete or summary_complete:
         print(Path(path).parent)
         break
 PY
@@ -775,8 +792,10 @@ log "  FAILED:  ${#FAILED[@]} (${FAILED[*]:-none})"
 log "  SKIPPED: ${#SKIPPED[@]} (${SKIPPED[*]:-none})"
 
 # Final sync so results are durable even if the 5-minute mirror cron is behind.
-aws s3 sync "${ORCHESTRATOR_EVALS_DIR}/jobs/" s3://strands-benchmark-results-mirror/jobs/ \
-  --region us-east-1 --only-show-errors 2>&1 | tee -a "$MATRIX_LOG"
+if [ "${SKIP_FINAL_SYNC:-0}" != "1" ]; then
+  aws s3 sync "${ORCHESTRATOR_EVALS_DIR}/jobs/" s3://strands-benchmark-results-mirror/jobs/ \
+    --region us-east-1 --only-show-errors 2>&1 | tee -a "$MATRIX_LOG"
+fi
 
 # One line per cell so you can see at a glance that results landed. Per-source
 # and equal-weighted metrics are computed by the job's metric plugin and live in
@@ -784,15 +803,15 @@ aws s3 sync "${ORCHESTRATOR_EVALS_DIR}/jobs/" s3://strands-benchmark-results-mir
 for cell_index in "${!CELL_AGENTS[@]}"; do
     AGENT="${CELL_AGENTS[$cell_index]}"
     MODEL="${CELL_MODELS[$cell_index]}"
-    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" "$HARBOR_VERSION_TAG" "$ORCHESTRATOR_EVALS_DIR" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
+    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$RUN_GROUP_TAG" "$N_ATTEMPTS" "$HARBOR_VERSION_TAG" "$ORCHESTRATOR_EVALS_DIR" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
 import glob
 import json
 import sys
 
-agent, model, dataset_slug, k, harbor_version, evals_dir = sys.argv[1:]
+agent, model, dataset_slug, run_group_tag, k, harbor_version, evals_dir = sys.argv[1:]
 paths = glob.glob(
     f"{evals_dir}/jobs/{agent}@*--{model}--{dataset_slug}"
-    f"--harbor{harbor_version}--k{k}/result.json"
+    f"{run_group_tag}--harbor{harbor_version}--k{k}/result.json"
 )
 if not paths:
     print(f"  {agent}/{model}: no result.json")

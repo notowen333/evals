@@ -301,6 +301,71 @@ def test_native_matrix_includes_run_group_in_state_and_job_identity() -> None:
     ) in result.stdout
 
 
+def test_native_matrix_reuses_current_harbor_summary_result(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    job_name = (
+        "claude-code@2.1.220--sonnet-4.6--terminal-bench-terminal-bench-2-1"
+        "--run-test-summary--harbor1234567--k2"
+    )
+    job_dir = runtime_dir / "jobs" / job_name
+    job_dir.mkdir(parents=True)
+    (job_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "finished_at": "2026-08-03T12:00:00Z",
+                "n_total_trials": 178,
+                "stats": {
+                    "n_completed_trials": 178,
+                    "n_errored_trials": 12,
+                    "n_running_trials": 0,
+                    "n_pending_trials": 0,
+                    "evals": {
+                        "claude-code__model__terminal-bench/terminal-bench-2-1": {
+                            "n_trials": 178
+                        }
+                    },
+                },
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(MATRIX_LAUNCHER),
+            "-a",
+            "claude-code",
+            "-m",
+            "sonnet-4.6",
+            "-d",
+            "terminal-bench/terminal-bench-2-1",
+            "-k",
+            "2",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "HARBOR_REF": "1234567890abcdef1234567890abcdef12345678",
+            "HARBOR_STRANDS_CHECKOUT": "/nonexistent",
+            "INTER_CELL_COOLDOWN_SECONDS": "0",
+            "MATRIX_STATE_ROOT": str(tmp_path / "state"),
+            "ORCHESTRATOR_EVALS_DIR": str(runtime_dir),
+            "RUN_GROUP": "test-summary",
+            "SKIP_FINAL_SYNC": "1",
+            "SKIP_PREFLIGHT": "1",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"complete result already exists at {job_dir}" in result.stdout
+    assert "\tclaude-code/sonnet-4.6\tOK\t" in next(
+        (tmp_path / "state").glob("*/status.tsv")
+    ).read_text()
+
+
 def test_native_matrix_defaults_to_full_supported_model_set() -> None:
     result = _matrix_plan("-a", "claude-code,opencode")
 
