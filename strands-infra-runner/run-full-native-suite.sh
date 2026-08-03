@@ -8,6 +8,8 @@
 set -uo pipefail
 
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ORCHESTRATOR_EVALS_DIR="${ORCHESTRATOR_EVALS_DIR:-/home/ubuntu/evals}"
+export ORCHESTRATOR_EVALS_DIR
 STATE_ROOT="${FULL_SUITE_STATE_ROOT:-/home/ubuntu/full-native-suite-runs}"
 HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
 REQUESTED_HARBOR_REF="${HARBOR_REF:-strands-working-fork}"
@@ -146,6 +148,8 @@ log "  Models:   ${MODELS}"
 log "  Harbor:   ${PINNED_HARBOR_SHA} (from '${REQUESTED_HARBOR_REF}', pinned for all sources)"
 log "  Attempts: k=${N_ATTEMPTS}"
 log "  Queue:    24 sequential cells, 16,320 trials with defaults"
+log "  Runner checkout: ${EVALS_DIR} (immutable code executed by this suite)"
+log "  Runtime checkout: ${ORCHESTRATOR_EVALS_DIR} (.venv, jobs, reports, and viewer data; runner code is not executed here)"
 log "  State:    ${STATE_DIR}"
 
 FAILED_SOURCES=()

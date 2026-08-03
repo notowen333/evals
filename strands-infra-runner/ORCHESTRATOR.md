@@ -299,16 +299,24 @@ the secret is missing, empty, malformed, or inaccessible.
 ## Directory layout on the orchestrator
 
 ```
-/home/ubuntu/evals/
-├── jobs/                ← active benchmark results (viewer points here)
-│   ├── stan@2c58790--opus-4.8--stanford-medagentbench/
-│   └── ...
-├── jobs/legacy/         ← old/pre-refactor results (not shown in viewer)
-└── strands-infra-runner/agents/stan/ ← agent wrapper and bundled Stan source
+/home/ubuntu/
+├── evals/                         ← RUNTIME CHECKOUT; do not use its runner code
+│   ├── .venv/                     ← shared benchmark Python environment
+│   ├── jobs/                      ← active results; viewer points here
+│   ├── reports/                   ← generated reports
+│   └── jobs/legacy/               ← archived results
+├── evals-runner-<evals-sha>/      ← RUNNER CHECKOUT; immutable code executed by suites
+├── matrix-runs/                   ← per-cell status and logs
+└── full-native-suite-runs/        ← source checkpoints and suite status
 ```
 
-Old results were moved to `jobs/legacy/` so the viewer only shows current runs.
-If you need to re-flatten a double-nested job: `mv jobs/X/X/* jobs/X/ && rmdir jobs/X/X`.
+`/home/ubuntu/evals` may contain local viewer, report, or historical runner
+changes and can be dirty. Suites must execute from a detached
+`evals-runner-<evals-sha>` worktree while setting
+`ORCHESTRATOR_EVALS_DIR=/home/ubuntu/evals`; this uses the shared environment
+and result storage without executing code from the dirty runtime checkout.
+
+Old results live in `evals/jobs/legacy/` so the viewer only shows current runs.
 
 ## Prerequisites
 
