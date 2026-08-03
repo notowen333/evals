@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).parents[4]
 RUNNER = REPO_ROOT / "strands-infra-runner" / "run.py"
 BENCHMARK_LAUNCHER = REPO_ROOT / "strands-infra-runner" / "run-benchmark.sh"
 MATRIX_LAUNCHER = REPO_ROOT / "strands-infra-runner" / "run-matrix.sh"
+FULL_SUITE_LAUNCHER = REPO_ROOT / "strands-infra-runner" / "run-full-native-suite.sh"
 INSTANCE_PROFILE = "StrandsBenchmarkHarborNodeRole"
 
 
@@ -68,6 +69,21 @@ def _benchmark_plan(agent: str, model: str) -> subprocess.CompletedProcess[str]:
         ],
         cwd=REPO_ROOT,
         env={**os.environ, "BENCHMARK_DRY_RUN": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _full_suite_plan(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(FULL_SUITE_LAUNCHER), *args],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "FULL_SUITE_DRY_RUN": "1",
+            "HARBOR_STRANDS_CHECKOUT": "/nonexistent",
+        },
         check=False,
         capture_output=True,
         text=True,
@@ -192,6 +208,17 @@ def test_native_index_run_passes_local_dataset_plugin_and_attempt_count() -> Non
     assert "-d" not in argv
 
 
+def test_ec2_launches_are_rate_limited() -> None:
+    argv = _dry_run(
+        HARBOR_AGENT="claude-code",
+        HARBOR_MODEL_NAME="us.anthropic.claude-sonnet-4-6",
+    )
+
+    environment_kwargs = _option_values(argv, "--ek")
+    assert "launch_rate_per_sec=1.5" in environment_kwargs
+    assert "launch_burst=3" in environment_kwargs
+
+
 def test_native_matrix_creates_independent_agent_cells() -> None:
     result = _matrix_plan(
         "-a",
@@ -204,10 +231,47 @@ def test_native_matrix_creates_independent_agent_cells() -> None:
 
     assert result.returncode == 0, result.stderr
     assert (
-        "matrix_id=strands-harness-benchmark-index--agents-claude-code@2.1.220+opencode@1.18.9--k2"
+        "matrix_id=strands-harness-benchmark-index--agents-claude-code@2.1.220+opencode@1.18.9--harbor-strands--k2"
     ) in result.stdout
     assert "cell=claude-code\tsonnet-4.6\t412" in result.stdout
     assert "cell=opencode\tsonnet-4.6\t412" in result.stdout
+
+
+def test_native_matrix_interleaves_agents_by_model() -> None:
+    result = _matrix_plan(
+        "-a",
+        "claude-code,opencode",
+        "-m",
+        "opus-4.8,sonnet-5",
+    )
+
+    assert result.returncode == 0, result.stderr
+    cells = [
+        tuple(line.removeprefix("cell=").split("\t")[:2])
+        for line in result.stdout.splitlines()
+        if line.startswith("cell=")
+    ]
+    assert cells == [
+        ("claude-code", "opus-4.8"),
+        ("opencode", "opus-4.8"),
+        ("claude-code", "sonnet-5"),
+        ("opencode", "sonnet-5"),
+    ]
+
+
+def test_native_matrix_pins_harbor_commit_in_run_identity() -> None:
+    harbor_sha = "1234567890abcdef1234567890abcdef12345678"
+    result = _matrix_plan(
+        "-a",
+        "claude-code,opencode",
+        "-m",
+        "sonnet-4.6",
+        HARBOR_REF=harbor_sha,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--harbor-1234567--k2" in result.stdout
+    assert f"harbor_ref={harbor_sha}" in result.stdout
 
 
 def test_native_matrix_defaults_to_full_supported_model_set() -> None:
@@ -231,6 +295,37 @@ def test_native_matrix_defaults_to_full_supported_model_set() -> None:
         ("opencode", "kimi-k2.5"),
     }
     assert result.stdout.count("unsupported=claude-code/") == 3
+
+
+def test_full_native_suite_plans_all_sources_and_trials() -> None:
+    result = _full_suite_plan()
+
+    assert result.returncode == 0, result.stderr
+    assert "source=tb21\tdataset=terminal-bench/terminal-bench-2-1\ttasks=89\ttrials_per_cell=178" in result.stdout
+    assert "source=gaia\tdataset=gaia/gaia\ttasks=165\ttrials_per_cell=330" in result.stdout
+    assert "source=tau3\tdataset=sierra-research/tau3-bench\ttasks=375\ttrials_per_cell=750" in result.stdout
+    assert "source=swe-bench-pro\tdataset=scale-ai/swe-bench-pro\ttasks=731\ttrials_per_cell=1462" in result.stdout
+    assert "total_tasks=1360" in result.stdout
+    assert "total_cells=24" in result.stdout
+    assert "total_trials=16320" in result.stdout
+    assert "harbor_ref=strands-working-fork" in result.stdout
+
+    cells = [
+        tuple(line.removeprefix("cell=").split("\t")[:4])
+        for line in result.stdout.splitlines()
+        if line.startswith("cell=")
+    ]
+    assert [cell[1] for cell in cells] == ["claude-code", "opencode"] * 12
+    assert cells[:6] == [
+        ("tb21", "claude-code", "opus-4.8", "178"),
+        ("tb21", "opencode", "opus-4.8", "178"),
+        ("tb21", "claude-code", "sonnet-5", "178"),
+        ("tb21", "opencode", "sonnet-5", "178"),
+        ("tb21", "claude-code", "sonnet-4.6", "178"),
+        ("tb21", "opencode", "sonnet-4.6", "178"),
+    ]
+    assert {cell[3] for cell in cells if cell[0] == "gaia"} == {"330"}
+    assert {cell[3] for cell in cells if cell[0] in {"tau3", "swe-bench-pro"}} == {"500"}
 
 
 def test_native_matrix_rejects_incompatible_claude_code_model() -> None:

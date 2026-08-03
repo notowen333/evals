@@ -15,7 +15,6 @@ Usage:
 Customize by editing the sys.argv list below, or override via env vars.
 """
 
-import asyncio
 import atexit
 import json
 import os
@@ -104,6 +103,8 @@ OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "jobs/ec2-fleet")
 N_TASKS = os.environ.get("N_TASKS")  # optional: cap number of tasks (for testing)
 N_ATTEMPTS = os.environ.get("N_ATTEMPTS")  # optional: attempts per task (pass@k)
 MAX_RETRIES = os.environ.get("MAX_RETRIES", "2")
+EC2_LAUNCH_RATE_PER_SEC = os.environ.get("EC2_LAUNCH_RATE_PER_SEC", "1.5")
+EC2_LAUNCH_BURST = os.environ.get("EC2_LAUNCH_BURST", "3")
 TASK_NAMES = [
     name.strip()
     for name in os.environ.get("TASK_NAMES", "").split(",")
@@ -238,6 +239,8 @@ sys.argv = [
     *(["--ek", f"subnet_id={SUBNET}"] if SUBNET else []),
     "--ek", "ssh_user=ubuntu",
     "--ek", "compose_up_timeout_sec=600",
+    "--ek", f"launch_rate_per_sec={EC2_LAUNCH_RATE_PER_SEC}",
+    "--ek", f"launch_burst={EC2_LAUNCH_BURST}",
     "--ek", f'tags={{"harbor:job":"{JOB_TAG}"}}',
     *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
     *[arg for k, v in _agent_env.items() for arg in ("--ae", f"{k}={v}")],

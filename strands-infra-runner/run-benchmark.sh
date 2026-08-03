@@ -21,6 +21,8 @@ DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STRANDS_HARNESS_DATASET="strands-harness-benchmark-index"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
+HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
+HARBOR_REF="${HARBOR_REF:-strands-working-fork}"
 
 if [ -n "${4:-}" ] && ! [[ "$4" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: concurrency must be a positive integer, got: $4" >&2
@@ -151,6 +153,7 @@ if [ -n "$OPENCODE_MANTLE_BASE_URL" ]; then
   echo "  Mantle URL:  $OPENCODE_MANTLE_BASE_URL"
 fi
 echo "  Dataset:     $DATASET"
+echo "  Harbor ref:  $HARBOR_REF"
 echo "  Concurrency: $CONCURRENCY"
 echo "  Attempts:    ${N_ATTEMPTS:-1}"
 echo "  Instance:    $INSTANCE_TYPE"
@@ -359,8 +362,27 @@ fi
 # Use a lockfile to avoid races when multiple benchmarks launch concurrently.
 (
   flock -x 200
-  pip install --force-reinstall --no-deps -q git+https://github.com/notowen333/harbor.git@strands-working-fork
+  pip install --force-reinstall --no-deps -q "git+${HARBOR_REPO_URL}@${HARBOR_REF}"
 ) 200>/tmp/harbor-install.lock
+
+INSTALLED_HARBOR_SHA=$(python3 - <<'PY'
+import importlib.metadata
+import json
+
+distribution = importlib.metadata.distribution("harbor")
+direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+print((direct_url.get("vcs_info") or {}).get("commit_id") or "")
+PY
+)
+if [ -z "$INSTALLED_HARBOR_SHA" ]; then
+  echo "ERROR: Installed Harbor package does not expose a VCS commit ID" >&2
+  exit 1
+fi
+if [[ "$HARBOR_REF" =~ ^[0-9a-f]{7,40}$ ]] && [[ "$INSTALLED_HARBOR_SHA" != "$HARBOR_REF"* ]]; then
+  echo "ERROR: Requested Harbor ${HARBOR_REF}, installed ${INSTALLED_HARBOR_SHA}" >&2
+  exit 1
+fi
+echo "  Harbor commit: ${INSTALLED_HARBOR_SHA}"
 
 # Archive previous run if it exists (NEVER delete results)
 if [ -d "${OUTPUT_DIR}/${JOB_NAME}" ]; then

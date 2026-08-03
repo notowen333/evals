@@ -232,5 +232,26 @@ assertion grader through Bedrock Mantle. Claude Code does not receive it.
 3. **64GB root volume** — Docker layers + uv cache overflow 8GB default.
 4. **Python 3.12 forced** — SWE-bench ships py3.9, strands needs ≥3.10.
 5. **Instance profile > forwarded creds** — no token expiry, no secrets in argv.
-6. **RunInstances rate limit** — bucket of 5, refill 2/sec. `--max-retries 2` handles it.
+6. **RunInstances rate limit** — bucket of 5, refill 2/sec. Pace launches at 1.5/sec with burst 3.
 7. **Never delete results** — archive only. S3 versioning as backup.
+
+### Full native-agent source suite
+
+Run the full directly comparable Claude matrix with:
+
+```bash
+FULL_SUITE_DRY_RUN=1 \
+  bash strands-infra-runner/run-full-native-suite.sh
+
+setsid bash strands-infra-runner/run-full-native-suite.sh \
+  </dev/null >/home/ubuntu/full-native-suite.log 2>&1 &
+```
+
+The default is Claude Code plus OpenCode, Opus 4.8 plus Sonnet 5 plus Sonnet
+4.6, and pass@2 over full TB21, GAIA, TAU3, and SWE-bench Pro. That produces
+24 sequential cells and 16,320 trials. The queue alternates agents, validates
+completed results before reuse, checkpoints each source, paces EC2 launches at
+1.5 requests/sec with burst 3, drains each cell fleet, and waits 60 seconds
+before launching the next cell. It resolves the freshest `strands-working-fork`
+commit once, verifies that exact SHA after every install, and records the short
+SHA in every job identity.

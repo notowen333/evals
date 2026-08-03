@@ -38,11 +38,15 @@ set -uo pipefail
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_ROOT="${MATRIX_STATE_ROOT:-/home/ubuntu/matrix-runs}"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
+HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
+HARBOR_REF="${HARBOR_REF:-strands-working-fork}"
 
 DATASET="strands-harness-benchmark-index"
 N_ATTEMPTS=2
 AGENTS="stan"
 CONCURRENCY=""
+INTER_CELL_COOLDOWN_SECONDS="${INTER_CELL_COOLDOWN_SECONDS:-60}"
+FLEET_DRAIN_TIMEOUT_SECONDS="${FLEET_DRAIN_TIMEOUT_SECONDS:-1200}"
 # Stan ref to pin: a branch, tag, or full/short commit SHA. Defaults to
 # STAN_BRANCH, else main's current HEAD. Resolved once for the whole matrix.
 STAN_REF_OVERRIDE="${STAN_REF_OVERRIDE:-}"
@@ -99,6 +103,14 @@ if ! [[ "$N_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [ -n "$CONCURRENCY" ] && ! [[ "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: concurrency must be a positive integer, got: ${CONCURRENCY}" >&2
+  exit 2
+fi
+if ! [[ "$INTER_CELL_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: INTER_CELL_COOLDOWN_SECONDS must be a non-negative integer" >&2
+  exit 2
+fi
+if ! [[ "$FLEET_DRAIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: FLEET_DRAIN_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 2
 fi
 
@@ -175,8 +187,8 @@ agent_model_incompatibility() {
 CELL_AGENTS=()
 CELL_MODELS=()
 INCOMPATIBLE_CELLS=()
-for agent in "${AGENT_LIST[@]}"; do
-  for model in "${MODEL_LIST[@]}"; do
+for model in "${MODEL_LIST[@]}"; do
+  for agent in "${AGENT_LIST[@]}"; do
     reason="$(agent_model_incompatibility "$agent" "$model")"
     if [ -n "$reason" ]; then
       INCOMPATIBLE_CELLS+=("${agent}/${model}: ${reason}")
@@ -251,6 +263,15 @@ print(json.loads(s['SecretString'])['stan_pat'])
     | awk '{print $1}' | head -1
 }
 
+pin_harbor_commit() {
+  local ref="$HARBOR_REF"
+  if [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]]; then
+    echo "$ref"
+    return 0
+  fi
+  git ls-remote "$HARBOR_REPO_URL" "$ref" | awk '{print $1}' | head -1
+}
+
 STAN_REF="${STAN_REF_OVERRIDE:-${STAN_BRANCH:-main}}"
 PINNED_STAN_SHA=""
 if [ "$HAS_STAN" -eq 1 ]; then
@@ -262,6 +283,19 @@ if [ "$HAS_STAN" -eq 1 ]; then
     exit 1
   fi
 fi
+
+PINNED_HARBOR_SHA=""
+if [ "${MATRIX_DRY_RUN:-0}" != "1" ]; then
+  PINNED_HARBOR_SHA="$(pin_harbor_commit)"
+  if [ -z "$PINNED_HARBOR_SHA" ]; then
+    echo "ERROR: Could not resolve Harbor commit for ref '${HARBOR_REF}'." >&2
+    exit 1
+  fi
+fi
+HARBOR_STATE_TAG="${PINNED_HARBOR_SHA:-$HARBOR_REF}"
+HARBOR_STATE_TAG="${HARBOR_STATE_TAG//\//-}"
+HARBOR_VERSION_TAG="${HARBOR_STATE_TAG:0:7}"
+JOB_SUFFIX="--harbor${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 
 # Concurrency for one cell. The unit is TRIALS, not tasks: at k=2 Harbor schedules
 # 412 independent trials for 206 tasks (verified — 412 trial dirs on disk), so
@@ -324,7 +358,7 @@ for agent in "${AGENT_LIST[@]}"; do
   esac
 done
 AGENT_STATE_ID="$(IFS=+; echo "${AGENT_STATE_PARTS[*]}")"
-MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--k${N_ATTEMPTS}"
+MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 STATE_DIR="${STATE_ROOT}/${MATRIX_ID}"
 MATRIX_LOG="${STATE_DIR}/matrix.log"
 STATUS_FILE="${STATE_DIR}/status.tsv"
@@ -333,6 +367,7 @@ if [ "${MATRIX_DRY_RUN:-0}" = "1" ]; then
   echo "matrix_id=${MATRIX_ID}"
   echo "dataset=${DATASET}"
   echo "attempts=${N_ATTEMPTS}"
+  echo "harbor_ref=${PINNED_HARBOR_SHA:-$HARBOR_REF}"
   for cell_index in "${!CELL_AGENTS[@]}"; do
     printf 'cell=%s\t%s\t%s\n' \
       "${CELL_AGENTS[$cell_index]}" "${CELL_MODELS[$cell_index]}" \
@@ -366,8 +401,10 @@ log "=== Matrix start: ${MATRIX_ID} ==="
 log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
 log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per cell"
 log "  Agents:   ${AGENT_STATE_ID}"
+log "  Harbor:   ${PINNED_HARBOR_SHA} (from '${HARBOR_REF}', pinned for all cells)"
 log "  Models:   ${MODELS}"
 log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one cell at a time"
+log "  Launch pacing: ${EC2_LAUNCH_RATE_PER_SEC:-1.5}/s, burst ${EC2_LAUNCH_BURST:-3}; ${INTER_CELL_COOLDOWN_SECONDS}s cooldown"
 for cell_index in "${!CELL_AGENTS[@]}"; do
   log "    ${CELL_AGENTS[$cell_index]}/${CELL_MODELS[$cell_index]}: $(cell_concurrency "${CELL_MODELS[$cell_index]}") concurrent trials"
 done
@@ -378,7 +415,7 @@ if [ "${#INCOMPATIBLE_CELLS[@]}" -gt 0 ]; then
 fi
 log "  State:    ${STATE_DIR}"
 
-rm -f "${STATE_DIR}/COMPLETE"
+rm -f "${STATE_DIR}/COMPLETE" "${STATE_DIR}/INCOMPLETE"
 
 # --- Preflight -------------------------------------------------------------
 # Fail in the first minute rather than at 3am after burning a cell. Every check
@@ -553,10 +590,48 @@ agent_version_tag() {
   esac
 }
 
+cell_job_name() {
+  local agent="$1" model="$2" version
+  version="$(agent_version_tag "$agent")"
+  echo "${agent}${version:+@${version}}--${model}--${DATASET_SLUG}${JOB_SUFFIX}"
+}
+
+cell_fleet_instance_ids() {
+  local job_name="$1"
+  aws ec2 describe-instances --region us-east-1 \
+    --filters Name=instance-state-name,Values=pending,running,stopping,shutting-down \
+              "Name=tag:harbor:job,Values=${job_name}" \
+    --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true
+}
+
+terminate_and_drain_cell_fleet() {
+  local job_name="$1" ids waited=0
+  ids="$(cell_fleet_instance_ids "$job_name")"
+  if [ -n "${ids// /}" ]; then
+    log "     terminating remaining instances for ${job_name}: ${ids}"
+    # shellcheck disable=SC2086 # AWS CLI expects one argument per instance ID.
+    aws ec2 terminate-instances --region us-east-1 --instance-ids $ids >/dev/null 2>&1 || true
+  fi
+
+  while true; do
+    ids="$(cell_fleet_instance_ids "$job_name")"
+    if [ -z "${ids// /}" ]; then
+      log "     fleet drained for ${job_name}"
+      return 0
+    fi
+    if [ "$waited" -ge "$FLEET_DRAIN_TIMEOUT_SECONDS" ]; then
+      log "     WARNING: fleet did not drain within ${FLEET_DRAIN_TIMEOUT_SECONDS}s: ${ids}"
+      return 1
+    fi
+    sleep 15
+    waited=$((waited + 15))
+  done
+}
+
 completed_job_path() {
   local agent="$1" model="$2" version pattern
   version="$(agent_version_tag "$agent")"
-  pattern="${EVALS_DIR}/jobs/${agent}${version:+@${version}}--${model}--${DATASET_SLUG}--k${N_ATTEMPTS}/result.json"
+  pattern="${EVALS_DIR}/jobs/${agent}${version:+@${version}}--${model}--${DATASET_SLUG}${JOB_SUFFIX}/result.json"
   python3 - "$pattern" "$DATASET" "$TASK_COUNT" "$N_ATTEMPTS" <<'PY'
 import glob
 import json
@@ -634,8 +709,9 @@ for cell_index in "${!CELL_AGENTS[@]}"; do
   # prefixes: bash decides which words are assignments BEFORE expanding them, so an
   # expansion that yields "NAME=val" is run as a command (exit 127), not assigned.
     CELL_ENV=(
-      "JOB_NAME_SUFFIX=--k${N_ATTEMPTS}"
+      "JOB_NAME_SUFFIX=${JOB_SUFFIX}"
       "N_ATTEMPTS=${N_ATTEMPTS}"
+      "HARBOR_REF=${PINNED_HARBOR_SHA}"
     )
     if [[ "$AGENT" == stan* ]]; then
       CELL_ENV+=(
@@ -668,18 +744,12 @@ for cell_index in "${!CELL_AGENTS[@]}"; do
       FAILED+=("$CELL_KEY")
     fi
 
-  # Terminate anything this cell's own cleanup missed, so a crashed cell can't
-  # leak instances into the next one. Scoped to this cell's harbor:job tag —
-  # never a blanket sweep, which would kill instances from another run.
-    ORPHANS=$(aws ec2 describe-instances --region us-east-1 \
-      --filters Name=instance-state-name,Values=running,pending \
-                Name=key-name,Values=harbor-benchmark \
-                "Name=tag:harbor:job,Values=${AGENT}@*--${MODEL}--${DATASET_SLUG}--k${N_ATTEMPTS}" \
-      --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true)
-    if [ -n "${ORPHANS// /}" ]; then
-      log "     terminating orphans for this cell: ${ORPHANS}"
-      # shellcheck disable=SC2086 # AWS CLI expects one argument per instance ID.
-      aws ec2 terminate-instances --region us-east-1 --instance-ids $ORPHANS >/dev/null 2>&1 || true
+  # Drain this exact cell before the next one can provision. The cooldown starts
+  # only after the fleet is gone, keeping RunInstances bursts separated.
+    terminate_and_drain_cell_fleet "$(cell_job_name "$AGENT" "$MODEL")" || true
+    if [ "$INTER_CELL_COOLDOWN_SECONDS" -gt 0 ]; then
+      log "     cooling down ${INTER_CELL_COOLDOWN_SECONDS}s before the next cell"
+      sleep "$INTER_CELL_COOLDOWN_SECONDS"
     fi
 done
 
@@ -698,14 +768,15 @@ aws s3 sync /home/ubuntu/evals/jobs/ s3://strands-benchmark-results-mirror/jobs/
 for cell_index in "${!CELL_AGENTS[@]}"; do
     AGENT="${CELL_AGENTS[$cell_index]}"
     MODEL="${CELL_MODELS[$cell_index]}"
-    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
+    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" "$HARBOR_VERSION_TAG" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
 import glob
 import json
 import sys
 
-agent, model, dataset_slug, k = sys.argv[1:]
+agent, model, dataset_slug, k, harbor_version = sys.argv[1:]
 paths = glob.glob(
-    f"/home/ubuntu/evals/jobs/{agent}@*--{model}--{dataset_slug}--k{k}/result.json"
+    f"/home/ubuntu/evals/jobs/{agent}@*--{model}--{dataset_slug}"
+    f"--harbor{harbor_version}--k{k}/result.json"
 )
 if not paths:
     print(f"  {agent}/{model}: no result.json")
@@ -726,7 +797,11 @@ for key, ev in (stats.get("evals") or {}).items():
 PY
 done
 
-date -u +%Y-%m-%dT%H:%M:%SZ >"${STATE_DIR}/COMPLETE"
-log "Wrote ${STATE_DIR}/COMPLETE"
-
-[ "${#FAILED[@]}" -eq 0 ] || exit 1
+if [ "${#FAILED[@]}" -eq 0 ]; then
+  date -u +%Y-%m-%dT%H:%M:%SZ >"${STATE_DIR}/COMPLETE"
+  log "Wrote ${STATE_DIR}/COMPLETE"
+else
+  date -u +%Y-%m-%dT%H:%M:%SZ >"${STATE_DIR}/INCOMPLETE"
+  log "Wrote ${STATE_DIR}/INCOMPLETE"
+  exit 1
+fi

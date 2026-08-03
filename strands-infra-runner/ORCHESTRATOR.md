@@ -225,6 +225,24 @@ setsid bash strands-infra-runner/run-matrix.sh \
   </dev/null >/home/ubuntu/native-agents-k2.log 2>&1 &
 ```
 
+For the directly comparable full-source suite, use the dedicated driver:
+
+```bash
+FULL_SUITE_DRY_RUN=1 \
+  bash strands-infra-runner/run-full-native-suite.sh
+
+setsid bash strands-infra-runner/run-full-native-suite.sh \
+  </dev/null >/home/ubuntu/full-native-suite.log 2>&1 &
+```
+
+The default queue runs Claude Code and OpenCode on Opus 4.8, Sonnet 5, and
+Sonnet 4.6 across full TB21 (89), GAIA (165), TAU3 (375), and SWE-bench Pro
+(731). At pass@2 this is 24 sequential cells and 16,320 trials. Cells alternate
+Claude Code/OpenCode, each source writes a checkpoint, and exact completed
+results are reused on restart. The driver resolves the latest
+`strands-working-fork` commit once, installs and verifies that exact SHA for
+every cell, and includes it in job identities.
+
 Each agent/model pair has its own versioned state key and log. Re-running the
 command validates completed job data and skips only that exact completed cell;
 one agent cannot suppress another. Incompatible cells are reported and omitted:
@@ -237,8 +255,9 @@ mid-matrix can't give later models a different agent build than earlier ones. A
 pinned SHA is validated against the GitHub API during preflight.
 
 State lives under `/home/ubuntu/matrix-runs/`, keyed by dataset, agent versions,
-and `k` (`matrix.log`, `status.tsv`, per-cell logs, `COMPLETE`). Job dirs and S3
-prefixes get a `--k<N>` suffix so pass@k never overwrites the k=1 baselines.
+Harbor commit, and `k` (`matrix.log`, `status.tsv`, per-cell logs, `COMPLETE`).
+Job dirs and S3 prefixes include `--harbor<SHA>--k<N>` so a new Harbor build or
+pass@k value never reuses an older result.
 
 ## TAU3 simulated user setup
 
@@ -311,6 +330,7 @@ Before first use, ensure the orchestrator has:
 - **Orchestrator must stay alive** for the full run. Use `setsid` + SSM. If it dies,
   the cleanup handler terminates orphan instances but S3 upload won't fire.
 - **EC2 RunInstances rate limit** (bucket 5, refill 2/sec) causes some launch failures
-  at 500 concurrency. `--max-retries 2 --retry-include RuntimeError` handles this.
+  at 500 concurrency. EC2 launches are paced at 1.5 requests/sec with burst 3;
+  cells drain fully and cool down for 60 seconds before the queue advances.
 - **Kimi K2.5 has no native web-search integration** through the Bedrock provider.
   Stan continues without `web_search`; `web_fetch` uses Kimi itself for summarization.
