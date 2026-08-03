@@ -149,7 +149,7 @@ log "  Harbor:   ${PINNED_HARBOR_SHA} (from '${REQUESTED_HARBOR_REF}', pinned fo
 log "  Attempts: k=${N_ATTEMPTS}"
 log "  Queue:    24 sequential cells, 16,320 trials with defaults"
 log "  Runner checkout: ${EVALS_DIR} (immutable code executed by this suite)"
-log "  Runtime checkout: ${ORCHESTRATOR_EVALS_DIR} (.venv, jobs, reports, and viewer data; runner code is not executed here)"
+log "  Runtime checkout: ${ORCHESTRATOR_EVALS_DIR} (.venv, jobs, reports, and Harbor frontend viewer data; runner code is not executed here)"
 log "  State:    ${STATE_DIR}"
 
 FAILED_SOURCES=()

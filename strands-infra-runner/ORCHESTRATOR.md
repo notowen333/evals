@@ -300,9 +300,9 @@ the secret is missing, empty, malformed, or inaccessible.
 
 ```
 /home/ubuntu/
-├── evals/                         ← RUNTIME CHECKOUT; do not use its runner code
+├── evals/                         ← RUNTIME + HARBOR FRONTEND VIEWER CHECKOUT
 │   ├── .venv/                     ← shared benchmark Python environment
-│   ├── jobs/                      ← active results; viewer points here
+│   ├── jobs/                      ← active results; Harbor frontend viewer reads these
 │   ├── reports/                   ← generated reports
 │   └── jobs/legacy/               ← archived results
 ├── evals-runner-<evals-sha>/      ← RUNNER CHECKOUT; immutable code executed by suites
@@ -310,11 +310,12 @@ the secret is missing, empty, malformed, or inaccessible.
 └── full-native-suite-runs/        ← source checkpoints and suite status
 ```
 
-`/home/ubuntu/evals` may contain local viewer, report, or historical runner
-changes and can be dirty. Suites must execute from a detached
-`evals-runner-<evals-sha>` worktree while setting
+`/home/ubuntu/evals` hosts shared runtime state and the Harbor frontend viewer's
+data. It may contain local frontend, report, or historical runner changes and
+can be dirty. Its runner source files are not executed. Suites must execute from
+a detached `evals-runner-<evals-sha>` worktree while setting
 `ORCHESTRATOR_EVALS_DIR=/home/ubuntu/evals`; this uses the shared environment
-and result storage without executing code from the dirty runtime checkout.
+and result storage, while the Harbor frontend viewer reads `evals/jobs/`.
 
 Old results live in `evals/jobs/legacy/` so the viewer only shows current runs.
 
