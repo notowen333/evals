@@ -13,13 +13,14 @@
 # constraint. See model_token_cap() before adding one back.
 #
 # Usage:
-#   run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent]
+#   run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agents]
 #                 [-s stan-ref]
 #
 # Examples:
 #   run-matrix.sh                                  # 5-model matrix at pass@2
 #   run-matrix.sh -k 4                             # same matrix at pass@4
 #   run-matrix.sh -m opus-4.8,sonnet-4.6 -k 2      # just two models
+#   run-matrix.sh -a claude-code,opencode           # full supported native matrix
 #   run-matrix.sh -s 45fed43                       # pin an exact Stan commit
 #   run-matrix.sh -s my-feature-branch             # or a branch/tag
 #
@@ -28,7 +29,7 @@
 #   <state>/status.tsv    machine-readable cell status
 #   <state>/<model>.log   full run log for that cell
 #   <state>/COMPLETE      written when the whole matrix finishes
-#   where <state> = /home/ubuntu/matrix-runs/<dataset-slug>--k<N>/
+#   where <state> includes the dataset, agent versions, and k.
 #
 # Resumable: re-run with the same -d/-k and cells already marked OK are skipped.
 
@@ -40,14 +41,15 @@ HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-
 
 DATASET="strands-harness-benchmark-index"
 N_ATTEMPTS=2
-AGENT="stan"
+AGENTS="stan"
 CONCURRENCY=""
 # Stan ref to pin: a branch, tag, or full/short commit SHA. Defaults to
 # STAN_BRANCH, else main's current HEAD. Resolved once for the whole matrix.
 STAN_REF_OVERRIDE="${STAN_REF_OVERRIDE:-}"
 
-# The five models with full k=1 baselines on the index.
-DEFAULT_MODELS="opus-4.8,openai.gpt-5.6-sol,sonnet-5,openai.zai.glm-5,kimi-k2.5"
+# Stan's five-model baseline and the full model set used for native products.
+STAN_DEFAULT_MODELS="opus-4.8,openai.gpt-5.6-sol,sonnet-5,openai.zai.glm-5,kimi-k2.5"
+NATIVE_DEFAULT_MODELS="sonnet-4.6,${STAN_DEFAULT_MODELS}"
 MODELS=""
 
 # --- Token-concurrency caps (nodes) --------------------------------------
@@ -85,12 +87,110 @@ while getopts "d:k:m:n:a:s:" opt; do
     k) N_ATTEMPTS="$OPTARG" ;;
     m) MODELS="$OPTARG" ;;
     n) CONCURRENCY="$OPTARG" ;;
-    a) AGENT="$OPTARG" ;;
+    a) AGENTS="$OPTARG" ;;
     s) STAN_REF_OVERRIDE="$OPTARG" ;;
-    *) echo "Usage: run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agent] [-s stan-ref]" >&2; exit 2 ;;
+    *) echo "Usage: run-matrix.sh [-d dataset] [-k attempts] [-m models] [-n concurrency] [-a agents] [-s stan-ref]" >&2; exit 2 ;;
   esac
 done
-MODELS="${MODELS:-$DEFAULT_MODELS}"
+
+if ! [[ "$N_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: attempts must be a positive integer, got: ${N_ATTEMPTS}" >&2
+  exit 2
+fi
+if [ -n "$CONCURRENCY" ] && ! [[ "$CONCURRENCY" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: concurrency must be a positive integer, got: ${CONCURRENCY}" >&2
+  exit 2
+fi
+
+IFS=',' read -r -a RAW_AGENT_LIST <<<"$AGENTS"
+AGENT_LIST=()
+HAS_STAN=0
+HAS_NATIVE=0
+for agent in "${RAW_AGENT_LIST[@]}"; do
+  agent="$(echo "$agent" | tr -d '[:space:]')"
+  case "$agent" in
+    claude)
+      agent="claude-code"
+      ;;
+    claude-code|opencode)
+      HAS_NATIVE=1
+      ;;
+    stan*)
+      HAS_STAN=1
+      ;;
+    "")
+      continue
+      ;;
+  esac
+  AGENT_LIST+=("$agent")
+done
+if [ "${#AGENT_LIST[@]}" -eq 0 ]; then
+  echo "ERROR: at least one agent is required" >&2
+  exit 2
+fi
+
+# Native product runs cover the full benchmark model set by default. Unsupported
+# pairs are reported and omitted (Claude Code only speaks the Claude protocol).
+if [ -z "$MODELS" ]; then
+  if [ "$HAS_NATIVE" -eq 0 ]; then
+    MODELS="$STAN_DEFAULT_MODELS"
+  else
+    MODELS="$NATIVE_DEFAULT_MODELS"
+  fi
+fi
+IFS=',' read -r -a RAW_MODEL_LIST <<<"$MODELS"
+MODEL_LIST=()
+for model in "${RAW_MODEL_LIST[@]}"; do
+  model="$(echo "$model" | tr -d '[:space:]')"
+  [ -n "$model" ] && MODEL_LIST+=("$model")
+done
+if [ "${#MODEL_LIST[@]}" -eq 0 ]; then
+  echo "ERROR: at least one model is required" >&2
+  exit 2
+fi
+
+resolve_model_id() {
+  case "$1" in
+    sonnet-4.6|sonnet) echo "us.anthropic.claude-sonnet-4-6" ;;
+    opus-4.6) echo "global.anthropic.claude-opus-4-6-v1" ;;
+    opus-4.8|opus) echo "global.anthropic.claude-opus-4-8" ;;
+    sonnet-5|sonnet5) echo "global.anthropic.claude-sonnet-5" ;;
+    kimi-k2.5|kimi-2.5|kimi) echo "moonshotai.kimi-k2.5" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+agent_model_incompatibility() {
+  local agent="$1" model="$2" model_id
+  model_id="$(resolve_model_id "$model")"
+  case "$agent" in
+    claude-code)
+      if [[ "$model_id" != *anthropic.claude* ]]; then
+        echo "Claude Code requires the Anthropic Claude protocol"
+      fi
+      ;;
+  esac
+}
+
+CELL_AGENTS=()
+CELL_MODELS=()
+INCOMPATIBLE_CELLS=()
+for agent in "${AGENT_LIST[@]}"; do
+  for model in "${MODEL_LIST[@]}"; do
+    reason="$(agent_model_incompatibility "$agent" "$model")"
+    if [ -n "$reason" ]; then
+      INCOMPATIBLE_CELLS+=("${agent}/${model}: ${reason}")
+    else
+      CELL_AGENTS+=("$agent")
+      CELL_MODELS+=("$model")
+    fi
+  done
+done
+if [ "${#CELL_AGENTS[@]}" -eq 0 ]; then
+  echo "ERROR: no compatible agent/model cells were selected" >&2
+  printf '  %s\n' "${INCOMPATIBLE_CELLS[@]}" >&2
+  exit 2
+fi
 
 # --- EC2 ceiling ---------------------------------------------------------
 # Static on purpose: the account's On-Demand Standard quota is 9216 vCPU in
@@ -153,7 +253,7 @@ print(json.loads(s['SecretString'])['stan_pat'])
 
 STAN_REF="${STAN_REF_OVERRIDE:-${STAN_BRANCH:-main}}"
 PINNED_STAN_SHA=""
-if [[ "$AGENT" == stan* ]]; then
+if [ "$HAS_STAN" -eq 1 ]; then
   PINNED_STAN_SHA="$(pin_stan_commit)"
   if [ -z "$PINNED_STAN_SHA" ]; then
     echo "ERROR: Could not resolve Stan commit for ref '${STAN_REF}'." >&2
@@ -206,10 +306,45 @@ PY
 }
 
 DATASET_SLUG="${DATASET//\//-}"
-MATRIX_ID="${DATASET_SLUG}--k${N_ATTEMPTS}"
+AGENT_STATE_PARTS=()
+for agent in "${AGENT_LIST[@]}"; do
+  case "$agent" in
+    stan*)
+      AGENT_STATE_PARTS+=("${agent}@${PINNED_STAN_SHA:0:7}")
+      ;;
+    claude-code)
+      AGENT_STATE_PARTS+=("${agent}@${CLAUDE_CODE_VERSION:-2.1.220}")
+      ;;
+    opencode)
+      AGENT_STATE_PARTS+=("${agent}@${OPENCODE_VERSION:-1.18.9}")
+      ;;
+    *)
+      AGENT_STATE_PARTS+=("$agent")
+      ;;
+  esac
+done
+AGENT_STATE_ID="$(IFS=+; echo "${AGENT_STATE_PARTS[*]}")"
+MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--k${N_ATTEMPTS}"
 STATE_DIR="${STATE_ROOT}/${MATRIX_ID}"
 MATRIX_LOG="${STATE_DIR}/matrix.log"
 STATUS_FILE="${STATE_DIR}/status.tsv"
+
+if [ "${MATRIX_DRY_RUN:-0}" = "1" ]; then
+  echo "matrix_id=${MATRIX_ID}"
+  echo "dataset=${DATASET}"
+  echo "attempts=${N_ATTEMPTS}"
+  for cell_index in "${!CELL_AGENTS[@]}"; do
+    printf 'cell=%s\t%s\t%s\n' \
+      "${CELL_AGENTS[$cell_index]}" "${CELL_MODELS[$cell_index]}" \
+      "$(cell_concurrency "${CELL_MODELS[$cell_index]}")"
+  done
+  if [ "${#INCOMPATIBLE_CELLS[@]}" -gt 0 ]; then
+    for skipped in "${INCOMPATIBLE_CELLS[@]}"; do
+      printf 'unsupported=%s\n' "$skipped"
+    done
+  fi
+  exit 0
+fi
 
 mkdir -p "$STATE_DIR"
 touch "$STATUS_FILE"
@@ -227,19 +362,20 @@ record() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "${3:-}" >>"$STATUS_FILE"
 }
 
-IFS=',' read -r -a MODEL_LIST <<<"$MODELS"
-
 log "=== Matrix start: ${MATRIX_ID} ==="
 log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
-log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per model"
-log "  Agent:    ${AGENT}${PINNED_STAN_SHA:+ @ ${PINNED_STAN_SHA:0:7} (from '${STAN_REF}', pinned for all cells)}"
+log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per cell"
+log "  Agents:   ${AGENT_STATE_ID}"
 log "  Models:   ${MODELS}"
-log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one model at a time"
-for m in "${MODEL_LIST[@]}"; do
-  m="$(echo "$m" | tr -d '[:space:]')"
-  [ -z "$m" ] && continue
-  log "    ${m}: $(cell_concurrency "$m") concurrent trials"
+log "  EC2 ceiling: ${MAX_FLEET_VCPU} vCPU (${MAX_FLEET_NODES} nodes), one cell at a time"
+for cell_index in "${!CELL_AGENTS[@]}"; do
+  log "    ${CELL_AGENTS[$cell_index]}/${CELL_MODELS[$cell_index]}: $(cell_concurrency "${CELL_MODELS[$cell_index]}") concurrent trials"
 done
+if [ "${#INCOMPATIBLE_CELLS[@]}" -gt 0 ]; then
+  for skipped in "${INCOMPATIBLE_CELLS[@]}"; do
+    log "    unsupported ${skipped}"
+  done
+fi
 log "  State:    ${STATE_DIR}"
 
 rm -f "${STATE_DIR}/COMPLETE"
@@ -259,7 +395,7 @@ preflight() {
   # Disk. A 206-task job dir is ~166MB; k=2 doubles it, times N models.
   local avail_gb needed_gb
   avail_gb=$(df -BG --output=avail /home/ubuntu | tail -1 | tr -dc '0-9')
-  needed_gb=$(python3 -c "print(max(5, int(0.18 * ${TASK_COUNT} * ${N_ATTEMPTS} * ${#MODEL_LIST[@]} / 1024) + 5))")
+  needed_gb=$(python3 -c "print(max(5, int(0.18 * ${TASK_COUNT} * ${N_ATTEMPTS} * ${#CELL_AGENTS[@]} / 1024) + 5))")
   if [ "${avail_gb:-0}" -lt "$needed_gb" ]; then
     echo "PREFLIGHT FAIL: only ${avail_gb}GB free on /home/ubuntu, need ~${needed_gb}GB" >&2
     fail=1
@@ -408,37 +544,86 @@ FAILED=()
 SKIPPED=()
 SUCCEEDED=()
 
-for MODEL in "${MODEL_LIST[@]}"; do
-  MODEL="$(echo "$MODEL" | tr -d '[:space:]')"
-  [ -z "$MODEL" ] && continue
+agent_version_tag() {
+  case "$1" in
+    stan*) echo "${PINNED_STAN_SHA:0:7}" ;;
+    claude-code) echo "${CLAUDE_CODE_VERSION:-2.1.220}" ;;
+    opencode) echo "${OPENCODE_VERSION:-1.18.9}" ;;
+    *) echo "" ;;
+  esac
+}
 
-  if [ "$(cell_status "$MODEL")" = "OK" ]; then
-    log "SKIP ${MODEL} — already completed in this matrix"
-    SKIPPED+=("$MODEL")
-    continue
-  fi
+completed_job_path() {
+  local agent="$1" model="$2" version pattern
+  version="$(agent_version_tag "$agent")"
+  pattern="${EVALS_DIR}/jobs/${agent}${version:+@${version}}--${model}--${DATASET_SLUG}--k${N_ATTEMPTS}/result.json"
+  python3 - "$pattern" "$DATASET" "$TASK_COUNT" "$N_ATTEMPTS" <<'PY'
+import glob
+import json
+import sys
+from collections import Counter
+from pathlib import Path
 
-  CELL_CONCURRENCY="$(cell_concurrency "$MODEL")"
-  CELL_LOG="${STATE_DIR}/${MODEL}.log"
-  log "RUN  ${MODEL} at -n ${CELL_CONCURRENCY} → ${CELL_LOG}"
-  record "$MODEL" "RUNNING" "n=${CELL_CONCURRENCY}"
+pattern, dataset, expected_tasks, k = sys.argv[1:]
+expected_tasks, k = int(expected_tasks), int(k)
+for path in sorted(glob.glob(pattern), reverse=True):
+    try:
+        with open(path) as fh:
+            trials = json.load(fh).get("trial_results") or []
+    except (OSError, json.JSONDecodeError):
+        continue
+    counts = Counter(
+        trial.get("task_name")
+        for trial in trials
+        if trial.get("source") == dataset and trial.get("task_name")
+    )
+    has_clean_trial = any(trial.get("exception_info") is None for trial in trials)
+    if (
+        len(counts) == expected_tasks
+        and set(counts.values()) == {k}
+        and has_clean_trial
+    ):
+        print(Path(path).parent)
+        break
+PY
+}
+
+for cell_index in "${!CELL_AGENTS[@]}"; do
+    AGENT="${CELL_AGENTS[$cell_index]}"
+    MODEL="${CELL_MODELS[$cell_index]}"
+    CELL_KEY="${AGENT}/${MODEL}"
+
+    EXISTING_JOB="$(completed_job_path "$AGENT" "$MODEL")"
+    if [ -n "$EXISTING_JOB" ]; then
+      log "SKIP ${CELL_KEY} — complete result already exists at ${EXISTING_JOB}"
+      if [ "$(cell_status "$CELL_KEY")" != "OK" ]; then
+        record "$CELL_KEY" "OK" "reused=${EXISTING_JOB}"
+      fi
+      SKIPPED+=("$CELL_KEY")
+      continue
+    fi
+
+    CELL_CONCURRENCY="$(cell_concurrency "$MODEL")"
+    CELL_LOG="${STATE_DIR}/${AGENT}--${MODEL}.log"
+    log "RUN  ${CELL_KEY} at -n ${CELL_CONCURRENCY} → ${CELL_LOG}"
+    record "$CELL_KEY" "RUNNING" "n=${CELL_CONCURRENCY}"
 
   # Wait for EC2 room under the ceiling. Measuring real usage (not just our own
   # nodes) means an unrelated run delays us instead of being ignored or killed.
   # Bounded so a permanently-busy account can't hang the matrix overnight.
-  NEEDED_VCPU=$((CELL_CONCURRENCY * VCPU_PER_NODE))
-  for i in $(seq 1 240); do
-    IN_USE=$(fleet_vcpu_in_use)
-    [ $((IN_USE + NEEDED_VCPU)) -le "$MAX_FLEET_VCPU" ] && break
-    if [ "$i" -eq 240 ]; then
-      log "     WARNING: ${IN_USE} vCPU still in use after 4h; proceeding anyway"
-      break
-    fi
-    log "     waiting for EC2 room: ${IN_USE} in use, need ${NEEDED_VCPU}, ceiling ${MAX_FLEET_VCPU}"
-    sleep 60
-  done
+    NEEDED_VCPU=$((CELL_CONCURRENCY * VCPU_PER_NODE))
+    for wait_index in $(seq 1 240); do
+      IN_USE=$(fleet_vcpu_in_use)
+      [ $((IN_USE + NEEDED_VCPU)) -le "$MAX_FLEET_VCPU" ] && break
+      if [ "$wait_index" -eq 240 ]; then
+        log "     WARNING: ${IN_USE} vCPU still in use after 4h; proceeding anyway"
+        break
+      fi
+      log "     waiting for EC2 room: ${IN_USE} in use, need ${NEEDED_VCPU}, ceiling ${MAX_FLEET_VCPU}"
+      sleep 60
+    done
 
-  START_EPOCH=$(date -u +%s)
+    START_EPOCH=$(date -u +%s)
 
   # JOB_NAME_SUFFIX gives the pass@k run its own job dir and S3 prefix so it
   # never archives or overwrites the k=1 baselines.
@@ -448,46 +633,54 @@ for MODEL in "${MODEL_LIST[@]}"; do
   # Built as an array and passed to `env` rather than as `${VAR:+NAME=val}` command
   # prefixes: bash decides which words are assignments BEFORE expanding them, so an
   # expansion that yields "NAME=val" is run as a command (exit 127), not assigned.
-  CELL_ENV=(
-    "JOB_NAME_SUFFIX=--k${N_ATTEMPTS}"
-    "N_ATTEMPTS=${N_ATTEMPTS}"
-  )
-  if [ -n "$PINNED_STAN_SHA" ]; then
-    CELL_ENV+=(
-      "STAN_BRANCH=${PINNED_STAN_SHA}"
-      "VERSION_TAG=${PINNED_STAN_SHA:0:7}"
+    CELL_ENV=(
+      "JOB_NAME_SUFFIX=--k${N_ATTEMPTS}"
+      "N_ATTEMPTS=${N_ATTEMPTS}"
     )
-  fi
+    if [[ "$AGENT" == stan* ]]; then
+      CELL_ENV+=(
+        "STAN_BRANCH=${PINNED_STAN_SHA}"
+        "VERSION_TAG=${PINNED_STAN_SHA:0:7}"
+      )
+    fi
 
-  env "${CELL_ENV[@]}" \
-    bash "${EVALS_DIR}/strands-infra-runner/run-benchmark.sh" \
-      "$AGENT" "$MODEL" "$DATASET" "$CELL_CONCURRENCY" \
-      </dev/null >"$CELL_LOG" 2>&1
-  CELL_EXIT=$?
-  ELAPSED=$(( $(date -u +%s) - START_EPOCH ))
+    env "${CELL_ENV[@]}" \
+      bash "${EVALS_DIR}/strands-infra-runner/run-benchmark.sh" \
+        "$AGENT" "$MODEL" "$DATASET" "$CELL_CONCURRENCY" \
+        </dev/null >"$CELL_LOG" 2>&1
+    CELL_EXIT=$?
+    ELAPSED=$(( $(date -u +%s) - START_EPOCH ))
 
-  if [ "$CELL_EXIT" -eq 0 ]; then
-    log "OK   ${MODEL} in ${ELAPSED}s"
-    record "$MODEL" "OK" "${ELAPSED}s"
-    SUCCEEDED+=("$MODEL")
-  else
-    log "FAIL ${MODEL} exit=${CELL_EXIT} after ${ELAPSED}s — see ${CELL_LOG}"
-    record "$MODEL" "FAIL" "exit=${CELL_EXIT} ${ELAPSED}s"
-    FAILED+=("$MODEL")
-  fi
+    if [ "$CELL_EXIT" -eq 0 ]; then
+      COMPLETED_JOB="$(completed_job_path "$AGENT" "$MODEL")"
+      if [ -n "$COMPLETED_JOB" ]; then
+        log "OK   ${CELL_KEY} in ${ELAPSED}s"
+        record "$CELL_KEY" "OK" "${ELAPSED}s"
+        SUCCEEDED+=("$CELL_KEY")
+      else
+        CELL_EXIT=6
+        log "FAIL ${CELL_KEY} produced no complete result with a clean trial after ${ELAPSED}s"
+      fi
+    fi
+    if [ "$CELL_EXIT" -ne 0 ]; then
+      log "FAIL ${CELL_KEY} exit=${CELL_EXIT} after ${ELAPSED}s — see ${CELL_LOG}"
+      record "$CELL_KEY" "FAIL" "exit=${CELL_EXIT} ${ELAPSED}s"
+      FAILED+=("$CELL_KEY")
+    fi
 
   # Terminate anything this cell's own cleanup missed, so a crashed cell can't
   # leak instances into the next one. Scoped to this cell's harbor:job tag —
   # never a blanket sweep, which would kill instances from another run.
-  ORPHANS=$(aws ec2 describe-instances --region us-east-1 \
-    --filters Name=instance-state-name,Values=running,pending \
-              Name=key-name,Values=harbor-benchmark \
-              "Name=tag:harbor:job,Values=${AGENT}@*--${MODEL}--${DATASET_SLUG}--k${N_ATTEMPTS}" \
-    --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true)
-  if [ -n "${ORPHANS// /}" ]; then
-    log "     terminating orphans for this cell: ${ORPHANS}"
-    aws ec2 terminate-instances --region us-east-1 --instance-ids $ORPHANS >/dev/null 2>&1 || true
-  fi
+    ORPHANS=$(aws ec2 describe-instances --region us-east-1 \
+      --filters Name=instance-state-name,Values=running,pending \
+                Name=key-name,Values=harbor-benchmark \
+                "Name=tag:harbor:job,Values=${AGENT}@*--${MODEL}--${DATASET_SLUG}--k${N_ATTEMPTS}" \
+      --query "Reservations[].Instances[].InstanceId" --output text 2>/dev/null || true)
+    if [ -n "${ORPHANS// /}" ]; then
+      log "     terminating orphans for this cell: ${ORPHANS}"
+      # shellcheck disable=SC2086 # AWS CLI expects one argument per instance ID.
+      aws ec2 terminate-instances --region us-east-1 --instance-ids $ORPHANS >/dev/null 2>&1 || true
+    fi
 done
 
 log "=== Matrix complete: ${MATRIX_ID} ==="
@@ -502,20 +695,23 @@ aws s3 sync /home/ubuntu/evals/jobs/ s3://strands-benchmark-results-mirror/jobs/
 # One line per cell so you can see at a glance that results landed. Per-source
 # and equal-weighted metrics are computed by the job's metric plugin and live in
 # each job's result.json / the viewer.
-for MODEL in "${MODEL_LIST[@]}"; do
-  MODEL="$(echo "$MODEL" | tr -d '[:space:]')"
-  [ -z "$MODEL" ] && continue
-  python3 - "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
+for cell_index in "${!CELL_AGENTS[@]}"; do
+    AGENT="${CELL_AGENTS[$cell_index]}"
+    MODEL="${CELL_MODELS[$cell_index]}"
+    python3 - "$AGENT" "$MODEL" "$DATASET_SLUG" "$N_ATTEMPTS" <<'PY' 2>&1 | tee -a "$MATRIX_LOG"
 import glob
 import json
 import sys
 
-model, dataset_slug, k = sys.argv[1:]
-paths = glob.glob(f"/home/ubuntu/evals/jobs/*--{model}--{dataset_slug}--k{k}/result.json")
+agent, model, dataset_slug, k = sys.argv[1:]
+paths = glob.glob(
+    f"/home/ubuntu/evals/jobs/{agent}@*--{model}--{dataset_slug}--k{k}/result.json"
+)
 if not paths:
-    print(f"  {model}: no result.json")
+    print(f"  {agent}/{model}: no result.json")
     sys.exit()
-with open(paths[0]) as fh:
+path = max(paths, key=lambda item: __import__("os").path.getmtime(item))
+with open(path) as fh:
     stats = (json.load(fh).get("stats") or {})
 for key, ev in (stats.get("evals") or {}).items():
     merged = {}
@@ -523,7 +719,7 @@ for key, ev in (stats.get("evals") or {}).items():
         merged.update(m)
     pak = {kk: round(vv, 4) for kk, vv in sorted((ev.get("pass_at_k") or {}).items())}
     print(
-        f"  {model}: n={ev.get('n_trials')} errors={ev.get('n_errors')} "
+        f"  {agent}/{model}: n={ev.get('n_trials')} errors={ev.get('n_errors')} "
         f"mean={merged.get('mean')} equal_weighted={merged.get('equal_weighted_mean')} "
         f"pass@k={pak or '(none)'}"
     )

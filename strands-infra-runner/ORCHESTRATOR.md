@@ -30,7 +30,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | Options | Default |
 |-----|---------|---------|
-| `agent` | `stan` or any dir under `strands-infra-runner/agents/` | required |
+| `agent` | `claude-code`, `opencode`, or any dir under `strands-infra-runner/agents/` | required |
 | `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, `kimi-k2.5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
 | `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia/gaia`) | required |
 | `concurrency` | Number of parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
@@ -52,6 +52,10 @@ run-benchmark.sh stan kimi-k2.5 terminal-bench/terminal-bench-2-1 89
 
 # One-task TAU3 smoke test; the simulated user and grader use Bedrock Mantle
 run-benchmark.sh stan sonnet-4.6 sierra-research/tau3-bench 1
+
+# Native product comparisons on the same Bedrock model
+run-benchmark.sh claude-code sonnet-4.6 swe-bench/swe-bench-verified
+run-benchmark.sh opencode sonnet-4.6 swe-bench/swe-bench-verified
 ```
 
 ## Job naming and results
@@ -168,6 +172,31 @@ it's a branch/tag, the SHA comes from `git ls-remote`; when it's already a SHA,
 it's used directly — `ls-remote` matches refs only and returns nothing for a raw
 commit, so it cannot be used to resolve or validate one.
 
+## Native Claude Code and OpenCode setup
+
+The `claude-code` and `opencode` names select Harbor's built-in installed-agent
+adapters. No local wrapper directory is required.
+
+| Agent | Default pinned version | Harbor model value |
+|-------|------------------------|--------------------|
+| `claude-code` | `2.1.220` | Raw Bedrock model ID |
+| `opencode` | `1.18.9` | `amazon-bedrock/<model-id>` or `openai/<model-id>` |
+
+Override the pins with `CLAUDE_CODE_VERSION` or `OPENCODE_VERSION`. Claude Code
+uses the fleet instance profile; its main, fast, and subagent model aliases are
+pinned to the selected benchmark model. Claude Code only supports Claude
+models. OpenCode uses Bedrock directly for Claude/Kimi and Bedrock Mantle for
+GPT/GLM. GPT uses Mantle's `/openai/v1` Responses route; GLM uses the `/v1`
+OpenAI-compatible route with the transport-only `openai.` prefix removed from
+its model ID. The launcher loads `bedrock_api_key` for both paths and pins
+OpenCode's small-model work to the selected benchmark model. Harbor stores
+environment references rather than secret values in job configuration.
+
+No custom skills, MCP servers, memory, or web-search credentials are enabled.
+For TAU3 runs, the same `bedrock_api_key` secret also configures the simulated
+user and assertion grader through Bedrock Mantle. Claude Code never receives
+the key.
+
 ## Matrix runs (pass@k across models)
 
 `run-matrix.sh` launches the model matrix sequentially and unattended. Models run
@@ -183,19 +212,33 @@ setsid bash strands-infra-runner/run-matrix.sh -k 2 \
 |------|---------|---------|
 | `-d` | Dataset | `strands-harness-benchmark-index` |
 | `-k` | Attempts per task (pass@k) | `2` |
-| `-m` | Comma-separated models | the five with k=1 baselines |
+| `-m` | Comma-separated models | Five-model Stan baseline; full six-model native set |
 | `-n` | Force per-cell concurrency | per-model cap |
-| `-a` | Agent | `stan` |
+| `-a` | Comma-separated agents | `stan` |
 | `-s` | Stan ref to pin: branch, tag, or SHA | `STAN_BRANCH`, else `main` HEAD |
+
+For the full supported native-product matrix:
+
+```bash
+setsid bash strands-infra-runner/run-matrix.sh \
+  -a claude-code,opencode -k 2 \
+  </dev/null >/home/ubuntu/native-agents-k2.log 2>&1 &
+```
+
+Each agent/model pair has its own versioned state key and log. Re-running the
+command validates completed job data and skips only that exact completed cell;
+one agent cannot suppress another. Incompatible cells are reported and omitted:
+Claude Code runs Sonnet/Opus, while OpenCode runs all six configured models.
+A cell is successful only when it has every expected task/attempt and at least
+one clean agent trial; all-error provider failures are retained as failed cells.
 
 The Stan SHA is resolved **once** and handed to every cell, so a push to Stan
 mid-matrix can't give later models a different agent build than earlier ones. A
 pinned SHA is validated against the GitHub API during preflight.
 
-State lives in `/home/ubuntu/matrix-runs/<dataset-slug>--k<N>/` (`matrix.log`,
-`status.tsv`, `<model>.log`, `COMPLETE`). Re-running with the same `-d`/`-k`
-skips cells already marked `OK`. Job dirs and S3 prefixes get a `--k<N>` suffix
-so pass@k never overwrites the k=1 baselines.
+State lives under `/home/ubuntu/matrix-runs/`, keyed by dataset, agent versions,
+and `k` (`matrix.log`, `status.tsv`, per-cell logs, `COMPLETE`). Job dirs and S3
+prefixes get a `--k<N>` suffix so pass@k never overwrites the k=1 baselines.
 
 ## TAU3 simulated user setup
 
@@ -225,7 +268,7 @@ Optional overrides:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `BEDROCK_API_KEY_SECRET_ID` | Secrets Manager name or ARN | `bedrock_api_key` |
+| `BEDROCK_API_KEY_SECRET_ID` | Secrets Manager name or ARN used by OpenCode and TAU3 | `bedrock_api_key` |
 | `TAU3_MANTLE_REGION` | Mantle and secret region | `us-east-1` |
 | `TAU3_USER_MODEL` | LiteLLM-prefixed simulated-user model | `openai/openai.gpt-oss-120b` |
 | `TAU3_NL_ASSERTIONS_MODEL` | LiteLLM-prefixed assertion-grader model | Same as `TAU3_USER_MODEL` |

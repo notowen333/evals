@@ -6,8 +6,8 @@
 #
 # Examples:
 #   run-benchmark stan sonnet-4.6 terminal-bench/terminal-bench-2-1
-#   run-benchmark stan kimi-k2.5 swe-bench/swe-bench-verified 500
-#   run-benchmark stan opus-4.8 gaia/gaia
+#   run-benchmark claude-code sonnet-4.6 swe-bench/swe-bench-verified 500
+#   run-benchmark opencode sonnet-4.6 swe-bench/swe-bench-verified 500
 #
 # Results upload to: s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 # Local results at:  jobs/<agent>@<commit-sha>--<model>--<dataset-slug>/
@@ -21,6 +21,15 @@ DATASET="${3:?Usage: run-benchmark <agent> <model> <dataset> [concurrency]}"
 EVALS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STRANDS_HARNESS_DATASET="strands-harness-benchmark-index"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
+
+if [ -n "${4:-}" ] && ! [[ "$4" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: concurrency must be a positive integer, got: $4" >&2
+  exit 2
+fi
+if [ -n "${N_ATTEMPTS:-}" ] && ! [[ "$N_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: N_ATTEMPTS must be a positive integer, got: $N_ATTEMPTS" >&2
+  exit 2
+fi
 
 # Auto-resolve concurrency from datasets.json (task count, capped at 2000)
 if [ -n "${4:-}" ]; then
@@ -37,14 +46,38 @@ fi
 # --- Resolve agent path ---
 AGENTS_DIR="${EVALS_DIR}/strands-infra-runner/agents"
 AGENT_MODULE="agent:MyAgent"
+HARBOR_AGENT=""
+HARBOR_MODEL_NAME=""
+OPENCODE_MANTLE_BASE_URL=""
+AGENT_VERSION=""
 
-if [ -d "${AGENTS_DIR}/${AGENT}" ]; then
-  AGENT_PATH="${AGENTS_DIR}/${AGENT}"
-else
-  echo "Agent not found: ${AGENTS_DIR}/${AGENT}" >&2
-  echo "Available: $(ls "${AGENTS_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
-  exit 1
-fi
+case "$AGENT" in
+  claude|claude-code)
+    AGENT="claude-code"
+    HARBOR_AGENT="claude-code"
+    AGENT_VERSION="${CLAUDE_CODE_VERSION:-2.1.220}"
+    VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
+    AGENT_PATH=""
+    ;;
+  opencode)
+    AGENT="opencode"
+    HARBOR_AGENT="opencode"
+    AGENT_VERSION="${OPENCODE_VERSION:-1.18.9}"
+    VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
+    AGENT_PATH=""
+    ;;
+  *)
+    if [ -d "${AGENTS_DIR}/${AGENT}" ]; then
+      HARBOR_AGENT="strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"
+      AGENT_PATH="${AGENTS_DIR}/${AGENT}"
+    else
+      echo "Agent not found: ${AGENTS_DIR}/${AGENT}" >&2
+      echo "Native agents: claude-code opencode" >&2
+      echo "Custom agents: $(ls "${AGENTS_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
+      exit 1
+    fi
+    ;;
+esac
 
 # --- Resolve model ID ---
 case "$MODEL" in
@@ -69,6 +102,28 @@ case "$MODEL" in
     ;;
 esac
 
+case "$HARBOR_AGENT" in
+  claude-code)
+    if [[ "$MODEL_ID" != *anthropic.claude* ]]; then
+      echo "ERROR: Claude Code Bedrock runs require an Anthropic Claude model, got: ${MODEL_ID}" >&2
+      exit 1
+    fi
+    HARBOR_MODEL_NAME="$MODEL_ID"
+    ;;
+  opencode)
+    if [[ "$MODEL_ID" == openai.gpt* ]]; then
+      HARBOR_MODEL_NAME="openai/${MODEL_ID}"
+      OPENCODE_MANTLE_BASE_URL="https://bedrock-mantle.${TAU3_MANTLE_REGION:-us-east-1}.api.aws/openai/v1"
+    elif [[ "$MODEL_ID" == openai.* ]]; then
+      # `openai.` selects Mantle in Strands; it is not part of non-GPT model IDs.
+      HARBOR_MODEL_NAME="openai/${MODEL_ID#openai.}"
+      OPENCODE_MANTLE_BASE_URL="https://bedrock-mantle.${TAU3_MANTLE_REGION:-us-east-1}.api.aws/v1"
+    else
+      HARBOR_MODEL_NAME="amazon-bedrock/${MODEL_ID}"
+    fi
+    ;;
+esac
+
 # --- Instance type (always xlarge to handle any task's resource requirements) ---
 INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 
@@ -76,22 +131,37 @@ INSTANCE_TYPE="${INSTANCE_TYPE:-m7i.xlarge}"
 DATASET_SLUG="${DATASET//\//-}"
 # JOB_NAME_SUFFIX distinguishes otherwise-identical runs (e.g. "--k4" for pass@k),
 # so a pass@4 run never archives or overwrites the pass@1 results.
-JOB_SUFFIX="${JOB_NAME_SUFFIX:-}"
+JOB_SUFFIX="${JOB_NAME_SUFFIX:-${N_ATTEMPTS:+--k${N_ATTEMPTS}}}"
 JOB_NAME="${AGENT}${VERSION_TAG:+@${VERSION_TAG}}--${MODEL}--${DATASET_SLUG}${JOB_SUFFIX}"
 OUTPUT_DIR="jobs"
 S3_PREFIX="${AGENT}/${MODEL}/${DATASET_SLUG}${JOB_SUFFIX}"
 LOG_FILE="/home/ubuntu/benchmark-${JOB_NAME}.log"
 
 echo "=== Benchmark Run ==="
-echo "  Agent:       $AGENT ($AGENT_PATH)"
+if [ -n "$AGENT_VERSION" ]; then
+  echo "  Agent:       $AGENT $AGENT_VERSION (Harbor native adapter)"
+else
+  echo "  Agent:       $AGENT ($AGENT_PATH)"
+fi
 echo "  Model:       $MODEL_ID"
+if [ -n "$HARBOR_MODEL_NAME" ]; then
+  echo "  Harbor model: $HARBOR_MODEL_NAME"
+fi
+if [ -n "$OPENCODE_MANTLE_BASE_URL" ]; then
+  echo "  Mantle URL:  $OPENCODE_MANTLE_BASE_URL"
+fi
 echo "  Dataset:     $DATASET"
 echo "  Concurrency: $CONCURRENCY"
+echo "  Attempts:    ${N_ATTEMPTS:-1}"
 echo "  Instance:    $INSTANCE_TYPE"
-echo "  Output:      $OUTPUT_DIR"
+echo "  Output:      $OUTPUT_DIR/$JOB_NAME"
 echo "  S3:          s3://strands-benchmark-results/$S3_PREFIX/"
 echo "  Log:         $LOG_FILE"
 echo ""
+
+if [ "${BENCHMARK_DRY_RUN:-0}" = "1" ]; then
+  exit 0
+fi
 
 # --- Setup ---
 export HOME=/root
@@ -145,13 +215,17 @@ except Exception:
   echo "  Metric plugin: ${JOB_PLUGIN}"
 fi
 
-configure_tau3_mantle() {
+BEDROCK_API_KEY_VALUE=""
+
+load_bedrock_api_key() {
   local secret_id="${BEDROCK_API_KEY_SECRET_ID:-bedrock_api_key}"
   local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
-  local api_key
 
-  echo "Configuring TAU3 simulated user through Bedrock Mantle..."
-  if ! api_key=$(python3 - "$secret_id" "$mantle_region" <<'PY'
+  if [ -n "$BEDROCK_API_KEY_VALUE" ]; then
+    return
+  fi
+
+  if ! BEDROCK_API_KEY_VALUE=$(python3 - "$secret_id" "$mantle_region" <<'PY'
 import json
 import sys
 
@@ -195,11 +269,30 @@ if not api_key:
 sys.stdout.write(api_key)
 PY
   ); then
-    echo "ERROR: Failed to load TAU3 Bedrock API key from Secrets Manager secret '${secret_id}'." >&2
+    echo "ERROR: Failed to load Bedrock API key from Secrets Manager secret '${secret_id}'." >&2
     exit 1
   fi
+}
 
-  export OPENAI_API_KEY="$api_key"
+configure_opencode_model() {
+  load_bedrock_api_key
+  if [[ "$HARBOR_MODEL_NAME" == openai/* ]]; then
+    export OPENAI_API_KEY="$BEDROCK_API_KEY_VALUE"
+    export OPENCODE_OPENAI_BASE_URL="$OPENCODE_MANTLE_BASE_URL"
+    export OPENAI_BASE_URL="$OPENCODE_MANTLE_BASE_URL"
+    echo "Configured OpenCode with the Bedrock Mantle OpenAI-compatible endpoint."
+  else
+    export AWS_BEARER_TOKEN_BEDROCK="$BEDROCK_API_KEY_VALUE"
+    echo "Configured OpenCode with Bedrock bearer-token authentication."
+  fi
+}
+
+configure_tau3_mantle() {
+  local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
+
+  echo "Configuring TAU3 simulated user through Bedrock Mantle..."
+  load_bedrock_api_key
+  export OPENAI_API_KEY="$BEDROCK_API_KEY_VALUE"
   export OPENAI_BASE_URL="https://bedrock-mantle.${mantle_region}.api.aws/v1"
   export TAU2_USER_MODEL="${TAU3_USER_MODEL:-openai/openai.gpt-oss-120b}"
   export TAU2_NL_ASSERTIONS_MODEL="${TAU3_NL_ASSERTIONS_MODEL:-$TAU2_USER_MODEL}"
@@ -208,6 +301,10 @@ PY
   echo "  User model:      ${TAU2_USER_MODEL}"
   echo "  Assertion model: ${TAU2_NL_ASSERTIONS_MODEL}"
 }
+
+if [ "$HARBOR_AGENT" = "opencode" ]; then
+  configure_opencode_model
+fi
 
 if [[ "$DATASET" == sierra-research/tau3-bench* || "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then
   configure_tau3_mantle
@@ -287,6 +384,9 @@ export SSH_KEY_PATH=/root/.ssh/harbor-benchmark.pem
 export AGENT_PATH="$AGENT_PATH"
 export AGENT_MODULE="$AGENT_MODULE"
 export AGENT_NAME="$AGENT"
+export HARBOR_AGENT="$HARBOR_AGENT"
+export HARBOR_MODEL_NAME="$HARBOR_MODEL_NAME"
+export AGENT_VERSION="$AGENT_VERSION"
 export STRANDS_MODEL="$MODEL_ID"
 
 # Never let a failed run abort the script — the S3 upload below must always run so
@@ -331,4 +431,4 @@ else
   echo "WARNING: Job directory $JOB_DIR not found, skipping S3 upload." >&2
 fi
 
-exit $RUN_EXIT
+exit "$RUN_EXIT"

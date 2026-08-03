@@ -8,12 +8,14 @@ From any machine with AWS credentials:
 aws ssm send-command \
   --instance-ids "i-0cfa2a926fa20f5f0" \
   --document-name "AWS-RunShellScript" \
-  --parameters '{"commands":["#!/bin/bash","export HOME=/root","cd /home/ubuntu/evals","git pull origin harbor-adapter","nohup env VERSION_TAG=<sha> bash examples/ec2-fleet/run-benchmark.sh <agent> <model> <dataset> > /home/ubuntu/<name>.log 2>&1 < /dev/null &","disown $!","echo PID: $!"],"executionTimeout":["120"]}' \
+  --parameters '{"commands":["#!/bin/bash","export HOME=/root","git config --global --add safe.directory /home/ubuntu/evals","cd /home/ubuntu/evals","git pull origin harbor-adapter","setsid env STAN_BRANCH=<ref> bash strands-infra-runner/run-benchmark.sh stan <model> <dataset> <concurrency> </dev/null >/home/ubuntu/<name>.log 2>&1 &","sleep 2","pgrep -af run-benchmark && echo LAUNCHED"],"executionTimeout":["120"]}' \
   --timeout-seconds 120 \
   --region us-east-1
 ```
 
-Replace `<sha>`, `<agent>`, `<model>`, `<dataset>`, and `<name>` with your values.
+Replace `<ref>`, `<model>`, `<dataset>`, `<concurrency>`, and `<name>` with your values. Use
+`setsid`; SSM terminates processes left in its command session after the command
+exits, even when they were started with `nohup` or `disown`.
 
 ## Job naming
 
@@ -23,30 +25,22 @@ Jobs are named automatically:
 <agent>@<commit-sha>--<model>--<dataset-slug>
 ```
 
-The `@<commit-sha>` comes from the `VERSION_TAG` env var. **Always set it** so
-you can trace exactly which Stan code produced a result.
+The `@<commit-sha>` comes from the `VERSION_TAG` env var. For Stan, the runner
+derives it from `STAN_BRANCH` when `VERSION_TAG` is unset.
 
 | Component | Source | Example |
 |-----------|--------|---------|
-| agent | First arg (directory name) | `stan_0.2.0` |
-| commit-sha | `VERSION_TAG` env var | `2c58790` |
+| agent | First arg | `stan`, `claude-code`, or `opencode` |
+| version | Stan commit or native product version | `2c58790` or `2.1.220` |
 | model | Second arg (alias) | `opus-4.6` |
 | dataset-slug | Third arg with `/` → `-` | `terminal-bench-terminal-bench-2-1` |
 
-Full example: `stan_0.2.0@2c58790--opus-4.6--terminal-bench-terminal-bench-2-1`
+Full example: `stan@2c58790--opus-4.6--terminal-bench-terminal-bench-2-1`
 
 ### How to find the commit SHA
 
-The Stan version on the orchestrator is always printed during install:
-```
-pip show strands-agents-stan | grep Version
-# 0.0.1.dev4+g2c58790c1 → sha is 2c58790
-```
-
-Or check the Stan repo directly:
-```bash
-cd stan && git log --oneline -1
-```
+The runner prints `Stan commit: <sha>` after resolving `STAN_BRANCH`, and the
+same SHA appears in the job directory name.
 
 ## Arguments
 
@@ -56,10 +50,10 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | What to pass | Default |
 |-----|-------------|---------|
-| `agent` | Directory under `examples/` | required |
+| `agent` | `claude-code`, `opencode`, or a directory under `strands-infra-runner/agents/` | required |
 | `model` | Alias or raw Bedrock model ID | required |
 | `dataset` | Harbor dataset path | required |
-| `concurrency` | Parallel EC2 instances | 500 |
+| `concurrency` | Parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
 
 ### Model aliases
 
@@ -67,8 +61,12 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 |-------|----------|
 | `sonnet-4.6` / `sonnet` | `us.anthropic.claude-sonnet-4-6` |
 | `opus-4.6` | `global.anthropic.claude-opus-4-6-v1` |
-| `opus-4.8` / `opus` | `us.anthropic.claude-opus-4-8` |
+| `opus-4.8` / `opus` | `global.anthropic.claude-opus-4-8` |
 | `sonnet-5` / `sonnet5` | `global.anthropic.claude-sonnet-5` |
+| `kimi-k2.5` / `kimi-2.5` / `kimi` | `moonshotai.kimi-k2.5` |
+
+Kimi runs through Bedrock Runtime in `us-east-1`. See the
+[Kimi K2.5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html).
 
 ### Datasets
 
@@ -76,49 +74,77 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 |-----------|-------------|-------|
 | SWE-bench Verified | `swe-bench/swe-bench-verified` | 500 |
 | Terminal-Bench 2.1 | `terminal-bench/terminal-bench-2-1` | 89 |
-| GAIA | `gaia` | 165 |
-| MedAgentBench | `medagentbench` | 300 |
+| GAIA | `gaia/gaia` | 165 |
+| MedAgentBench | `stanford/medagentbench` | 300 |
+| TAU3 | `sierra-research/tau3-bench` | 375 |
 
 ## Environment variables
 
 | Var | Purpose | Default |
 |-----|---------|---------|
-| `VERSION_TAG` | Commit SHA in job name | (none — omits `@sha`) |
+| `VERSION_TAG` | Commit SHA in job name | Stan commit resolved from `STAN_BRANCH` |
 | `STAN_BRANCH` | Git ref to install Stan from | `main` |
+| `CLAUDE_CODE_VERSION` | Claude Code CLI version installed by Harbor | `2.1.220` |
+| `OPENCODE_VERSION` | OpenCode CLI version installed by Harbor | `1.18.9` |
+| `HARBOR_STRANDS_CHECKOUT` | Separate Harbor fork checkout used by the custom benchmark | `/home/ubuntu/harbor-strands-working` |
 | `INSTANCE_TYPE` | Fleet node instance type | `m7i.xlarge` |
+| `BEDROCK_API_KEY_SECRET_ID` | Bedrock bearer-token secret used by OpenCode and TAU3 | `bedrock_api_key` |
+| `TAU3_MANTLE_REGION` | Bedrock Mantle region used by TAU3 | `us-east-1` |
+| `TAU3_USER_MODEL` | TAU3 simulated-user model, including LiteLLM provider prefix | `openai/openai.gpt-oss-120b` |
+| `TAU3_NL_ASSERTIONS_MODEL` | TAU3 assertion-grader model | Same as `TAU3_USER_MODEL` |
 
 ## Full examples
 
 ```bash
 # SWE-bench Verified, Sonnet 4.6
-env VERSION_TAG=2c58790 bash examples/ec2-fleet/run-benchmark.sh stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan sonnet-4.6 swe-bench/swe-bench-verified
 
 # Terminal-Bench 2.1, Opus 4.6
-env VERSION_TAG=2c58790 bash examples/ec2-fleet/run-benchmark.sh stan_0.2.0 opus-4.6 terminal-bench/terminal-bench-2-1
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan opus-4.6 terminal-bench/terminal-bench-2-1
 
 # Terminal-Bench 2.1, Sonnet 5
-env VERSION_TAG=2c58790 bash examples/ec2-fleet/run-benchmark.sh stan_0.2.0 sonnet-5 terminal-bench/terminal-bench-2-1
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan sonnet-5 terminal-bench/terminal-bench-2-1
 
-# GAIA, Opus 4.6, 300 concurrency
-env VERSION_TAG=2c58790 bash examples/ec2-fleet/run-benchmark.sh stan_0.2.0 opus-4.6 gaia 300
+# Claude Code through Bedrock and Harbor's native adapter
+bash strands-infra-runner/run-benchmark.sh claude-code sonnet-4.6 swe-bench/swe-bench-verified
+
+# OpenCode through Bedrock and Harbor's native adapter
+bash strands-infra-runner/run-benchmark.sh opencode sonnet-4.6 swe-bench/swe-bench-verified
+
+# Full supported pass@2 index matrix for both native products
+setsid bash strands-infra-runner/run-matrix.sh \
+  -a claude-code,opencode -k 2 \
+  </dev/null >/home/ubuntu/native-agents-k2.log 2>&1 &
+
+# GAIA, Opus 4.6
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan opus-4.6 gaia/gaia
+
+# Terminal-Bench 2.1, Kimi K2.5
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan kimi-k2.5 terminal-bench/terminal-bench-2-1
+
+# One-task TAU3 smoke test
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan sonnet-4.6 sierra-research/tau3-bench 1
+
+# Materialize the 206-task custom benchmark, then run it
+bash strands-infra-runner/setup-strands-harness-benchmark.sh
+env VERSION_TAG=2c58790 bash strands-infra-runner/run-benchmark.sh stan sonnet-4.6 strands-harness-benchmark-index
 
 # Specific Stan branch/commit
-env VERSION_TAG=abc1234 STAN_BRANCH=abc1234 bash examples/ec2-fleet/run-benchmark.sh stan_0.2.0 sonnet-4.6 swe-bench/swe-bench-verified
+env VERSION_TAG=abc1234 STAN_BRANCH=abc1234 bash strands-infra-runner/run-benchmark.sh stan sonnet-4.6 swe-bench/swe-bench-verified
 ```
 
 ## Viewing results
 
-The Harbor viewer is a web app running on the orchestrator.
+The Harbor viewer runs on port 7842 on the orchestrator.
 
 ```bash
-# Kill stale tunnels
-lsof -ti:5173 | xargs kill -9 2>/dev/null; lsof -ti:8081 | xargs kill -9 2>/dev/null
+# Connect to the production viewer
+aws ssm start-session --target i-0cfa2a926fa20f5f0 \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters '{"portNumber":["7842"],"localPortNumber":["7842"]}' \
+  --region us-east-1
 
-# Connect (two ports: React frontend + Python API)
-aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["5173"],"localPortNumber":["5173"]}' --region us-east-1 &
-aws ssm start-session --target i-0cfa2a926fa20f5f0 --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8081"],"localPortNumber":["8081"]}' --region us-east-1
-
-# Open http://localhost:5173
+# Open http://localhost:7842
 ```
 
 ## Monitoring
@@ -155,12 +181,16 @@ S3 versioning is enabled on the results bucket.
 ### What `run-benchmark.sh` does
 
 1. Resolves agent path, model ID, job name
-2. For `stan_*` agents: fetches PAT from Secrets Manager, pip installs Stan,
+2. Selects Harbor's native adapter for `claude-code` and `opencode`; other
+   agents continue through the custom Strands adapter
+3. For `stan` agents: fetches PAT from Secrets Manager, pip installs Stan,
    copies `strands_stan/` into agent dir so containers can import it
-3. Archives any previous run with same name
-4. Calls `run.py` → `harbor run` with EC2 fleet environment (500 parallel nodes)
-5. Each node: boot → Docker → install strands → upload agent → run → verify
-6. Post-run: patches agent display name, uploads all results to S3
+4. For TAU3: fetches `bedrock_api_key` and configures the simulated user and
+   assertion grader to use Bedrock Mantle
+5. Archives any previous run with same name
+6. Calls `run.py` → `harbor run` with an EC2 fleet sized to the dataset
+7. Each node: boot → Docker → install the selected agent → run → verify
+8. Uploads all results to S3
 
 ### Infrastructure
 
@@ -169,6 +199,31 @@ S3 versioning is enabled on the results bucket.
 - **IAM:** Fleet nodes use `StrandsBenchmarkHarborNodeRole` (Bedrock access)
 - **Viewer:** Runs in `.viewer-venv` (isolated from benchmark installs)
 - **Stan PAT:** Secrets Manager `stan_pat-lUflBx`
+- **TAU3 Bedrock API key:** Secrets Manager `bedrock_api_key`
+
+### Native competitor agents
+
+`claude-code` and `opencode` run the actual product CLIs through Harbor's
+built-in adapters. Claude Code uses the fleet node's
+`StrandsBenchmarkHarborNodeRole`. OpenCode's current Bedrock provider does not
+consume EC2 instance metadata, so the launcher loads `bedrock_api_key` and
+supplies it as `AWS_BEARER_TOKEN_BEDROCK`.
+
+Claude Code receives raw Claude Bedrock model IDs. Its Sonnet, Opus, Haiku, and
+subagent aliases are all pinned to that same ID so auxiliary calls cannot use a
+different model. Claude Code cannot run non-Claude models. OpenCode receives
+`amazon-bedrock/<model-id>` for native Bedrock models and `openai/<model-id>`
+for GPT/GLM models served by Bedrock Mantle. GPT uses Mantle's `/openai/v1`
+Responses route; GLM uses `/v1` with its transport-only `openai.` prefix
+removed. OpenCode's small-model work is pinned to the benchmark model. Neither
+run enables custom skills, MCP servers, persistent memory, or web-search
+credentials.
+
+Harbor receives the OpenCode credential as the environment reference
+`${AWS_BEARER_TOKEN_BEDROCK}`. The secret value is resolved at agent
+construction and is not written into the launcher argv or persisted job
+configuration. TAU3 also uses the same secret for its simulated user and
+assertion grader through Bedrock Mantle. Claude Code does not receive it.
 
 ### Hard-won learnings
 

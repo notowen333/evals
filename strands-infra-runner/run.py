@@ -17,6 +17,7 @@ Customize by editing the sys.argv list below, or override via env vars.
 
 import asyncio
 import atexit
+import json
 import os
 import signal
 import sys
@@ -38,6 +39,7 @@ except Exception as _e:
 # Scoped to THIS job's instances only (by tag), so concurrent runs don't kill each other.
 KEY_NAME = os.environ.get("KEY_NAME", "harbor-benchmark")
 JOB_TAG = os.environ.get("JOB_NAME", "ec2-fleet")
+DRY_RUN = os.environ.get("HARBOR_DRY_RUN") == "1"
 
 
 def _terminate_fleet():
@@ -66,9 +68,10 @@ def _signal_handler(signum, frame):
     sys.exit(1)
 
 
-signal.signal(signal.SIGINT, _signal_handler)
-signal.signal(signal.SIGTERM, _signal_handler)
-atexit.register(_terminate_fleet)
+if not DRY_RUN:
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    atexit.register(_terminate_fleet)
 
 # Thread pool scaling is handled natively by the Harbor fork (strands-working-fork)
 # in cli/utils.py — it sets max_workers based on n_concurrent_trials.
@@ -79,6 +82,12 @@ AGENT_PATH = os.environ.get("AGENT_PATH", "./examples/benchmark_agent")
 AGENT_MODULE = os.environ.get("AGENT_MODULE", "agent:MyAgent")
 AGENT_DEPS = os.environ.get("AGENT_DEPS")  # optional: override installed deps (default: strands-agents-tools)
 AGENT_NAME = os.environ.get("AGENT_NAME")  # display name for the viewer (e.g. stan)
+HARBOR_AGENT = os.environ.get(
+    "HARBOR_AGENT",
+    "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
+)
+HARBOR_MODEL_NAME = os.environ.get("HARBOR_MODEL_NAME")
+AGENT_VERSION = os.environ.get("AGENT_VERSION")
 DATASET = os.environ.get("DATASET", "swe-bench/swe-bench-verified")
 DATASET_PATH = os.environ.get("DATASET_PATH")
 JOB_PLUGIN = os.environ.get("JOB_PLUGIN")
@@ -132,13 +141,86 @@ def _resolve_aws_creds() -> dict[str, str]:
 # need to forward the orchestrator's creds (avoids token expiry + creds in argv).
 _aws_creds = {} if IAM_INSTANCE_PROFILE else _resolve_aws_creds()
 
+_native_agents = {"claude-code", "opencode"}
+_is_native_agent = HARBOR_AGENT in _native_agents
+if _is_native_agent and not HARBOR_MODEL_NAME:
+    raise SystemExit(
+        f"HARBOR_MODEL_NAME is required for native agent {HARBOR_AGENT!r}."
+    )
+
+_agent_args = ["-a", HARBOR_AGENT]
+if _is_native_agent:
+    _agent_args.extend(["-m", HARBOR_MODEL_NAME])
+    if AGENT_VERSION:
+        _agent_args.extend(["--ak", f"version={AGENT_VERSION}"])
+    if HARBOR_AGENT == "opencode":
+        # Keep title generation and other small-model work on the benchmark model.
+        opencode_config: dict[str, object] = {"small_model": HARBOR_MODEL_NAME}
+        if opencode_base_url := os.environ.get("OPENCODE_OPENAI_BASE_URL"):
+            provider = HARBOR_MODEL_NAME.split("/", 1)[0]
+            opencode_config["provider"] = {
+                provider: {"options": {"baseURL": opencode_base_url}}
+            }
+        opencode_config_json = json.dumps(opencode_config, separators=(",", ":"))
+        _agent_args.extend(["--ak", f"opencode_config={opencode_config_json}"])
+else:
+    if AGENT_NAME:
+        _agent_args.extend(["--ak", f"display_name={AGENT_NAME}"])
+    _agent_args.extend(
+        [
+            "--ak",
+            f"agent_path={AGENT_PATH}",
+            "--ak",
+            f"agent_module={AGENT_MODULE}",
+        ]
+    )
+    if AGENT_DEPS:
+        _agent_args.extend(["--ak", f"agent_deps={AGENT_DEPS}"])
+
+_agent_env = {"AWS_REGION": REGION, **_aws_creds}
+if _is_native_agent and HARBOR_AGENT == "claude-code":
+    # Keep Claude Code's main, fast, and subagent calls on the benchmark model.
+    _agent_env.update(
+        {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_MODEL": HARBOR_MODEL_NAME,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": HARBOR_MODEL_NAME,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": HARBOR_MODEL_NAME,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": HARBOR_MODEL_NAME,
+            "CLAUDE_CODE_SUBAGENT_MODEL": HARBOR_MODEL_NAME,
+        }
+    )
+elif _is_native_agent and HARBOR_AGENT == "opencode":
+    if HARBOR_MODEL_NAME.startswith("openai/"):
+        missing = [
+            key
+            for key in ("OPENAI_API_KEY", "OPENCODE_OPENAI_BASE_URL")
+            if not os.environ.get(key)
+        ]
+        if not DRY_RUN and missing:
+            raise SystemExit(
+                f"{', '.join(missing)} required for OpenCode Mantle runs."
+            )
+        _agent_env.update(
+            {
+                "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+                "OPENAI_BASE_URL": "${OPENCODE_OPENAI_BASE_URL}",
+            }
+        )
+    else:
+        if not DRY_RUN and not os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+            raise SystemExit(
+                "AWS_BEARER_TOKEN_BEDROCK is required for OpenCode Bedrock runs."
+            )
+        # Harbor resolves host-env templates at construction and persists the
+        # templates, not the secret values, in the job configuration.
+        _agent_env["AWS_BEARER_TOKEN_BEDROCK"] = "${AWS_BEARER_TOKEN_BEDROCK}"
+elif not _is_native_agent and os.environ.get("STRANDS_MODEL"):
+    _agent_env["STRANDS_MODEL"] = os.environ["STRANDS_MODEL"]
+
 sys.argv = [
     "harbor", "run",
-    "-a", "strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent",
-    *(["--ak", f"display_name={AGENT_NAME}"] if AGENT_NAME else []),
-    "--ak", f"agent_path={AGENT_PATH}",
-    "--ak", f"agent_module={AGENT_MODULE}",
-    *(["--ak", f"agent_deps={AGENT_DEPS}"] if AGENT_DEPS else []),
+    *_agent_args,
     *(("-p", DATASET_PATH) if DATASET_PATH else ("-d", DATASET)),
     *(("--plugin", JOB_PLUGIN) if JOB_PLUGIN else ()),
     "-n", CONCURRENCY,
@@ -158,8 +240,7 @@ sys.argv = [
     "--ek", "compose_up_timeout_sec=600",
     "--ek", f'tags={{"harbor:job":"{JOB_TAG}"}}',
     *(["--ek", f"iam_instance_profile={IAM_INSTANCE_PROFILE}"] if IAM_INSTANCE_PROFILE else []),
-    *[arg for k, v in _aws_creds.items() for arg in ("--ae", f"{k}={v}")],
-    *(["--ae", f"STRANDS_MODEL={os.environ['STRANDS_MODEL']}"] if os.environ.get("STRANDS_MODEL") else []),
+    *[arg for k, v in _agent_env.items() for arg in ("--ae", f"{k}={v}")],
     "-o", OUTPUT_DIR,
     "--job-name", JOB_NAME,
     "--max-retries", MAX_RETRIES,
@@ -171,6 +252,10 @@ sys.argv = [
     "--yes",
     "--debug",
 ]
+
+if DRY_RUN:
+    print(json.dumps(sys.argv, indent=2))
+    raise SystemExit(0)
 
 from harbor.cli.main import app
 app()
