@@ -229,9 +229,11 @@ For the directly comparable full-source suite, use the dedicated driver:
 
 ```bash
 FULL_SUITE_DRY_RUN=1 \
+  RUN_GROUP=strands-full-native-20260803 \
   bash strands-infra-runner/run-full-native-suite.sh
 
-setsid bash strands-infra-runner/run-full-native-suite.sh \
+RUN_GROUP=strands-full-native-20260803 \
+  setsid bash strands-infra-runner/run-full-native-suite.sh \
   </dev/null >/home/ubuntu/full-native-suite.log 2>&1 &
 ```
 
@@ -245,6 +247,9 @@ ceiling. Each source writes a checkpoint, and exact completed results are reused
 on restart. The driver resolves the latest
 `strands-working-fork` commit once, installs and verifies that exact SHA for
 every cell, and includes it in job identities.
+The shared `RUN_GROUP` label also appears in every suite state directory,
+matrix state directory, Harbor job name, and S3 prefix, making all 24 cells
+easy to identify as one campaign.
 
 Each agent/model pair has its own versioned state key and log. Re-running the
 command validates completed job data and skips only that exact completed cell;

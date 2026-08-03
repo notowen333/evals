@@ -42,6 +42,7 @@ STATE_ROOT="${MATRIX_STATE_ROOT:-/home/ubuntu/matrix-runs}"
 HARBOR_STRANDS_CHECKOUT="${HARBOR_STRANDS_CHECKOUT:-/home/ubuntu/harbor-strands-working}"
 HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
 HARBOR_REF="${HARBOR_REF:-strands-working-fork}"
+RUN_GROUP="${RUN_GROUP:-}"
 
 DATASET="strands-harness-benchmark-index"
 N_ATTEMPTS=2
@@ -113,6 +114,10 @@ if ! [[ "$INTER_CELL_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$FLEET_DRAIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: FLEET_DRAIN_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 2
+fi
+if [ -n "$RUN_GROUP" ] && ! [[ "$RUN_GROUP" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "ERROR: RUN_GROUP must contain only letters, numbers, dots, underscores, and hyphens" >&2
   exit 2
 fi
 
@@ -297,7 +302,11 @@ fi
 HARBOR_STATE_TAG="${PINNED_HARBOR_SHA:-$HARBOR_REF}"
 HARBOR_STATE_TAG="${HARBOR_STATE_TAG//\//-}"
 HARBOR_VERSION_TAG="${HARBOR_STATE_TAG:0:7}"
-JOB_SUFFIX="--harbor${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
+RUN_GROUP_TAG=""
+if [ -n "$RUN_GROUP" ]; then
+  RUN_GROUP_TAG="--run-${RUN_GROUP}"
+fi
+JOB_SUFFIX="${RUN_GROUP_TAG}--harbor${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 
 # Concurrency for one cell. The unit is TRIALS, not tasks: at k=2 Harbor schedules
 # 412 independent trials for 206 tasks (verified — 412 trial dirs on disk), so
@@ -362,13 +371,15 @@ done
 AGENT_STATE_ID="$(IFS=+; echo "${AGENT_STATE_PARTS[*]}")"
 MODEL_STATE_ID="$(IFS=+; echo "${MODEL_LIST[*]}")"
 MODEL_STATE_ID="${MODEL_STATE_ID//\//-}"
-MATRIX_ID="${DATASET_SLUG}--agents-${AGENT_STATE_ID}--models-${MODEL_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
+MATRIX_ID="${DATASET_SLUG}${RUN_GROUP_TAG}--agents-${AGENT_STATE_ID}--models-${MODEL_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 STATE_DIR="${STATE_ROOT}/${MATRIX_ID}"
 MATRIX_LOG="${STATE_DIR}/matrix.log"
 STATUS_FILE="${STATE_DIR}/status.tsv"
 
 if [ "${MATRIX_DRY_RUN:-0}" = "1" ]; then
   echo "matrix_id=${MATRIX_ID}"
+  echo "run_group=${RUN_GROUP:-none}"
+  echo "job_suffix=${JOB_SUFFIX}"
   echo "dataset=${DATASET}"
   echo "attempts=${N_ATTEMPTS}"
   echo "harbor_ref=${PINNED_HARBOR_SHA:-$HARBOR_REF}"
@@ -402,6 +413,7 @@ record() {
 }
 
 log "=== Matrix start: ${MATRIX_ID} ==="
+log "  Run group: ${RUN_GROUP:-none}"
 log "  Dataset:  ${DATASET} (${TASK_COUNT} tasks)"
 log "  Attempts: k=${N_ATTEMPTS}  →  $((TASK_COUNT * N_ATTEMPTS)) trials per cell"
 log "  Agents:   ${AGENT_STATE_ID}"

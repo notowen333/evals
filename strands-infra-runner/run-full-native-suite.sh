@@ -15,6 +15,7 @@ export ORCHESTRATOR_EVALS_DIR
 STATE_ROOT="${FULL_SUITE_STATE_ROOT:-/home/ubuntu/full-native-suite-runs}"
 HARBOR_REPO_URL="${HARBOR_REPO_URL:-https://github.com/notowen333/harbor.git}"
 REQUESTED_HARBOR_REF="${HARBOR_REF:-strands-working-fork}"
+RUN_GROUP="${RUN_GROUP:-strands-full-native-20260803}"
 AGENTS="claude-code,opencode"
 MODELS="opus-4.8,sonnet-5,sonnet-4.6"
 N_ATTEMPTS=2
@@ -66,6 +67,11 @@ if ! [[ "$PARALLEL_FLEET_VCPU" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: PARALLEL_FLEET_VCPU must be a positive integer" >&2
   exit 2
 fi
+if ! [[ "$RUN_GROUP" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "ERROR: RUN_GROUP must contain only letters, numbers, dots, underscores, and hyphens" >&2
+  exit 2
+fi
+export RUN_GROUP
 
 IFS=',' read -r -a RAW_MODEL_LIST <<<"$MODELS"
 MODEL_LIST=()
@@ -109,7 +115,7 @@ if [ "$PARALLEL_MODELS" = "1" ]; then
 else
   SCHEDULE_STATE_ID="sequential"
 fi
-SUITE_ID="full-native-suite--agents-${AGENT_STATE_ID}--models-${MODEL_STATE_ID}--${SCHEDULE_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
+SUITE_ID="full-native-suite--run-${RUN_GROUP}--agents-${AGENT_STATE_ID}--models-${MODEL_STATE_ID}--${SCHEDULE_STATE_ID}--harbor-${HARBOR_VERSION_TAG}--k${N_ATTEMPTS}"
 STATE_DIR="${STATE_ROOT}/${SUITE_ID}"
 SUITE_LOG="${STATE_DIR}/suite.log"
 STATUS_FILE="${STATE_DIR}/status.tsv"
@@ -129,6 +135,7 @@ matrix_args() {
 
 if [ "${FULL_SUITE_DRY_RUN:-0}" = "1" ]; then
   echo "suite_id=${SUITE_ID}"
+  echo "run_group=${RUN_GROUP}"
   echo "attempts=${N_ATTEMPTS}"
   echo "harbor_ref=${HARBOR_REF}"
   echo "parallel_models=${PARALLEL_MODELS}"
@@ -184,6 +191,7 @@ record() {
 }
 
 log "=== Full native suite start: ${SUITE_ID} ==="
+log "  Run group: ${RUN_GROUP}"
 log "  Sources:  TB21 (89), GAIA (165), TAU3 (375), SWE-bench Pro (731)"
 log "  Agents:   ${AGENT_STATE_ID}"
 log "  Models:   ${MODELS}"

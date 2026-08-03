@@ -279,6 +279,28 @@ def test_native_matrix_pins_harbor_commit_in_run_identity() -> None:
     assert f"harbor_ref={harbor_sha}" in result.stdout
 
 
+def test_native_matrix_includes_run_group_in_state_and_job_identity() -> None:
+    result = _matrix_plan(
+        "-a",
+        "claude-code,opencode",
+        "-m",
+        "sonnet-4.6",
+        HARBOR_REF="1234567890abcdef1234567890abcdef12345678",
+        RUN_GROUP="strands-full-native-20260803",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "run_group=strands-full-native-20260803" in result.stdout
+    assert (
+        "job_suffix=--run-strands-full-native-20260803--harbor1234567--k2"
+        in result.stdout
+    )
+    assert (
+        "matrix_id=strands-harness-benchmark-index"
+        "--run-strands-full-native-20260803--agents-"
+    ) in result.stdout
+
+
 def test_native_matrix_defaults_to_full_supported_model_set() -> None:
     result = _matrix_plan("-a", "claude-code,opencode")
 
@@ -313,6 +335,8 @@ def test_full_native_suite_plans_all_sources_and_trials() -> None:
     assert "total_tasks=1360" in result.stdout
     assert "total_cells=24" in result.stdout
     assert "total_trials=16320" in result.stdout
+    assert "run_group=strands-full-native-20260803" in result.stdout
+    assert "--run-strands-full-native-20260803--agents-" in result.stdout
     assert "harbor_ref=strands-working-fork" in result.stdout
     assert "parallel_models=1" in result.stdout
     assert "model_stagger_seconds=420" in result.stdout

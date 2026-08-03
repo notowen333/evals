@@ -241,9 +241,11 @@ Run the full directly comparable Claude matrix with:
 
 ```bash
 FULL_SUITE_DRY_RUN=1 \
+  RUN_GROUP=strands-full-native-20260803 \
   bash strands-infra-runner/run-full-native-suite.sh
 
-setsid bash strands-infra-runner/run-full-native-suite.sh \
+RUN_GROUP=strands-full-native-20260803 \
+  setsid bash strands-infra-runner/run-full-native-suite.sh \
   </dev/null >/home/ubuntu/full-native-suite.log 2>&1 &
 ```
 
@@ -256,4 +258,6 @@ The queue validates completed results before reuse, checkpoints each source,
 paces each lane's initial EC2 launches at 1.5 requests/sec with burst 3, and
 drains each cell fleet. It resolves the freshest `strands-working-fork` commit
 once, verifies that exact SHA after every install, and records the short SHA in
-every job identity.
+every job identity. `RUN_GROUP` defaults to `strands-full-native-20260803` for
+this campaign and appears in every suite state directory, matrix state
+directory, Harbor job name, and S3 prefix.
