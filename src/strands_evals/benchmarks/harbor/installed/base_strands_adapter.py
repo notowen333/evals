@@ -103,6 +103,18 @@ class BaseStrandsInstalledAgent(BaseInstalledAgent):
 
         # Append MCP server descriptions to the instruction
         if self.mcp_servers:
+            env["HARBOR_MCP_SERVERS"] = json.dumps(
+                [
+                    {
+                        "name": server.name,
+                        "transport": server.transport,
+                        "url": server.url,
+                        "command": server.command,
+                        "args": server.args,
+                    }
+                    for server in self.mcp_servers
+                ]
+            )
             mcp_info = "\n\nMCP Servers:\nThe following MCP servers are available.\n"
             for server in self.mcp_servers:
                 if server.transport == "stdio":
@@ -192,9 +204,7 @@ class BaseStrandsInstalledAgent(BaseInstalledAgent):
         if messages is None and conversation_jsonl_path.exists():
             try:
                 messages = [
-                    json.loads(line)
-                    for line in conversation_jsonl_path.read_text().splitlines()
-                    if line.strip()
+                    json.loads(line) for line in conversation_jsonl_path.read_text().splitlines() if line.strip()
                 ]
             except (json.JSONDecodeError, OSError) as exc:
                 logger.debug("path=<%s> | failed to read conversation.jsonl: %s", conversation_jsonl_path, exc)

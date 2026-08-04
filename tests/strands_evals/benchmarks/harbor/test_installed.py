@@ -4,6 +4,7 @@ import json
 
 import pytest
 from harbor.models.agent.context import AgentContext
+from harbor.models.task.config import MCPServerConfig
 
 from strands_evals.benchmarks.harbor.installed.py.agent import (
     _RUNNER_CONTAINER_PATH,
@@ -91,6 +92,46 @@ async def test_run_forwards_aws_creds(tmp_path):
     await agent.run("go", env, AgentContext())
 
     assert captured_env.get("AWS_ACCESS_KEY_ID") == "AKIA"
+
+
+def test_resolve_run_env_serializes_mcp_servers(tmp_path):
+    agent = _make_agent(
+        tmp_path,
+        mcp_servers=[
+            MCPServerConfig(
+                name="tau3",
+                transport="streamable-http",
+                url="http://tool-server:8000/mcp",
+            ),
+            MCPServerConfig(
+                name="local",
+                transport="stdio",
+                command="python",
+                args=["server.py", "--quiet"],
+            ),
+        ],
+    )
+
+    env, instruction = agent._resolve_run_env("complete the task")
+
+    assert json.loads(env["HARBOR_MCP_SERVERS"]) == [
+        {
+            "name": "tau3",
+            "transport": "streamable-http",
+            "url": "http://tool-server:8000/mcp",
+            "command": None,
+            "args": [],
+        },
+        {
+            "name": "local",
+            "transport": "stdio",
+            "url": None,
+            "command": "python",
+            "args": ["server.py", "--quiet"],
+        },
+    ]
+    assert "tau3: streamable-http transport" in instruction
+    assert "local: stdio transport" in instruction
 
 
 async def test_run_raises_on_nonzero_exit(tmp_path):
