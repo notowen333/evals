@@ -30,7 +30,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | Options | Default |
 |-----|---------|---------|
-| `agent` | `claude-code`, `opencode`, or any dir under `strands-infra-runner/agents/` | required |
+| `agent` | `claude-code`, `opencode`, `omp`, or any dir under `strands-infra-runner/agents/` | required |
 | `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, `kimi-k2.5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
 | `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia/gaia`) | required |
 | `concurrency` | Number of parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
@@ -172,15 +172,16 @@ it's a branch/tag, the SHA comes from `git ls-remote`; when it's already a SHA,
 it's used directly — `ls-remote` matches refs only and returns nothing for a raw
 commit, so it cannot be used to resolve or validate one.
 
-## Native Claude Code and OpenCode setup
+## Native Claude Code, OpenCode, and Omp setup
 
-The `claude-code` and `opencode` names select Harbor's built-in installed-agent
-adapters. No local wrapper directory is required.
+The `claude-code`, `opencode`, and `omp` names select Harbor's built-in
+installed-agent adapters. No local wrapper directory is required.
 
 | Agent | Default pinned version | Harbor model value |
 |-------|------------------------|--------------------|
 | `claude-code` | `2.1.220` | Raw Bedrock model ID |
 | `opencode` | `1.18.9` | `amazon-bedrock/<model-id>` or `openai/<model-id>` |
+| `omp` | `17.2.15` | `amazon-bedrock/<model-id>` (IAM instance profile) or `openai/<model-id>` (Mantle GPT) |
 
 Override the pins with `CLAUDE_CODE_VERSION` or `OPENCODE_VERSION`. Claude Code
 uses the fleet instance profile; its main, fast, and subagent model aliases are

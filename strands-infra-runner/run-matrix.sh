@@ -131,7 +131,7 @@ for agent in "${RAW_AGENT_LIST[@]}"; do
     claude)
       agent="claude-code"
       ;;
-    claude-code|opencode)
+    claude-code|opencode|omp)
       HAS_NATIVE=1
       ;;
     stan*)
@@ -362,6 +362,9 @@ for agent in "${AGENT_LIST[@]}"; do
       ;;
     opencode)
       AGENT_STATE_PARTS+=("${agent}@${OPENCODE_VERSION:-1.18.9}")
+      ;;
+    omp)
+      AGENT_STATE_PARTS+=("${agent}@${OMP_VERSION:-17.2.15}")
       ;;
     *)
       AGENT_STATE_PARTS+=("$agent")
