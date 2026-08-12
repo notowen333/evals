@@ -8,6 +8,7 @@
 #   run-benchmark stan sonnet-4.6 terminal-bench/terminal-bench-2-1
 #   run-benchmark claude-code sonnet-4.6 swe-bench/swe-bench-verified 500
 #   run-benchmark opencode sonnet-4.6 swe-bench/swe-bench-verified 500
+#   run-benchmark codex openai.gpt-5.6-sol swe-bench/swe-bench-verified 500
 #
 # Results upload to: s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 # Local results at:  jobs/<agent>@<commit-sha>--<model>--<dataset-slug>/
@@ -69,13 +70,24 @@ case "$AGENT" in
     VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
     AGENT_PATH=""
     ;;
+  codex)
+    AGENT="codex"
+    HARBOR_AGENT="codex"
+    # Codex ships fast; pinning matters. Empty ${CODEX_VERSION} lets Harbor's
+    # adapter fall through to `@latest` at install time, but the VERSION_TAG
+    # then reads as an empty @ segment in the job name. Require an explicit
+    # version so runs stay reproducible.
+    AGENT_VERSION="${CODEX_VERSION:?CODEX_VERSION must be set (e.g. 0.118.0)}"
+    VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
+    AGENT_PATH=""
+    ;;
   *)
     if [ -d "${AGENTS_DIR}/${AGENT}" ]; then
       HARBOR_AGENT="strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"
       AGENT_PATH="${AGENTS_DIR}/${AGENT}"
     else
       echo "Agent not found: ${AGENTS_DIR}/${AGENT}" >&2
-      echo "Native agents: claude-code opencode" >&2
+      echo "Native agents: claude-code opencode codex" >&2
       echo "Custom agents: $(ls "${AGENTS_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
       exit 1
     fi
@@ -125,6 +137,19 @@ case "$HARBOR_AGENT" in
       HARBOR_MODEL_NAME="amazon-bedrock/${MODEL_ID}"
     fi
     ;;
+  codex)
+    # Codex's adapter uses ModelConnectionSpec(default_provider="openai"), so
+    # it always resolves the OpenAI provider (OPENAI_API_KEY, OPENAI_BASE_URL).
+    # HARBOR_MODEL_NAME is the bare model ID the CLI passes to the endpoint;
+    # for Mantle it's the same "openai." prefix Strands uses.
+    if [[ "$MODEL_ID" == openai.gpt* ]]; then
+      HARBOR_MODEL_NAME="$MODEL_ID"
+      CODEX_MANTLE_BASE_URL="https://bedrock-mantle.${TAU3_MANTLE_REGION:-us-east-1}.api.aws/openai/v1"
+    else
+      echo "ERROR: Codex Bedrock runs require an OpenAI GPT model on Mantle, got: ${MODEL_ID}" >&2
+      exit 1
+    fi
+    ;;
 esac
 
 # --- Instance type (always xlarge to handle any task's resource requirements) ---
@@ -152,6 +177,9 @@ if [ -n "$HARBOR_MODEL_NAME" ]; then
 fi
 if [ -n "$OPENCODE_MANTLE_BASE_URL" ]; then
   echo "  Mantle URL:  $OPENCODE_MANTLE_BASE_URL"
+fi
+if [ -n "${CODEX_MANTLE_BASE_URL:-}" ]; then
+  echo "  Mantle URL:  $CODEX_MANTLE_BASE_URL"
 fi
 echo "  Dataset:     $DATASET"
 echo "  Harbor ref:  $HARBOR_REF"
@@ -293,6 +321,18 @@ configure_opencode_model() {
   fi
 }
 
+configure_codex_mantle() {
+  # Codex authenticates via OPENAI_API_KEY and reads its endpoint from
+  # OPENAI_BASE_URL; the Harbor adapter forwards both when it resolves the
+  # openai provider. Same Secrets Manager entry that TAU3/OpenCode use, since
+  # Mantle re-uses the bearer token as the API key.
+  load_bedrock_api_key
+  export OPENAI_API_KEY="$BEDROCK_API_KEY_VALUE"
+  export CODEX_OPENAI_BASE_URL="$CODEX_MANTLE_BASE_URL"
+  export OPENAI_BASE_URL="$CODEX_MANTLE_BASE_URL"
+  echo "Configured Codex with the Bedrock Mantle OpenAI-compatible endpoint."
+}
+
 configure_tau3_mantle() {
   local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
 
@@ -310,6 +350,10 @@ configure_tau3_mantle() {
 
 if [ "$HARBOR_AGENT" = "opencode" ]; then
   configure_opencode_model
+fi
+
+if [ "$HARBOR_AGENT" = "codex" ]; then
+  configure_codex_mantle
 fi
 
 if [[ "$DATASET" == sierra-research/tau3-bench* || "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then

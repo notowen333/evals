@@ -30,7 +30,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | Options | Default |
 |-----|---------|---------|
-| `agent` | `claude-code`, `opencode`, or any dir under `strands-infra-runner/agents/` | required |
+| `agent` | `claude-code`, `opencode`, `codex`, or any dir under `strands-infra-runner/agents/` | required |
 | `model` | `sonnet-4.6`, `opus-4.6`, `opus-4.8`, `sonnet-5`, `kimi-k2.5`, or a raw model ID (e.g. `openai.gpt-5.6-sol` for GPT via Bedrock Mantle) | required |
 | `dataset` | Any Harbor dataset (e.g. `swe-bench/swe-bench-verified`, `terminal-bench/terminal-bench-2-1`, `gaia/gaia`) | required |
 | `concurrency` | Number of parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
@@ -172,25 +172,29 @@ it's a branch/tag, the SHA comes from `git ls-remote`; when it's already a SHA,
 it's used directly — `ls-remote` matches refs only and returns nothing for a raw
 commit, so it cannot be used to resolve or validate one.
 
-## Native Claude Code and OpenCode setup
+## Native Claude Code, OpenCode, and Codex setup
 
-The `claude-code` and `opencode` names select Harbor's built-in installed-agent
-adapters. No local wrapper directory is required.
+The `claude-code`, `opencode`, and `codex` names select Harbor's built-in
+installed-agent adapters. No local wrapper directory is required.
 
 | Agent | Default pinned version | Harbor model value |
 |-------|------------------------|--------------------|
 | `claude-code` | `2.1.220` | Raw Bedrock model ID |
 | `opencode` | `1.18.9` | `amazon-bedrock/<model-id>` or `openai/<model-id>` |
+| `codex` | required via `CODEX_VERSION` | Bare model ID (e.g. `openai.gpt-5.6-sol`); auth flows via `OPENAI_API_KEY` / `OPENAI_BASE_URL` |
 
-Override the pins with `CLAUDE_CODE_VERSION` or `OPENCODE_VERSION`. Claude Code
-uses the fleet instance profile; its main, fast, and subagent model aliases are
-pinned to the selected benchmark model. Claude Code only supports Claude
-models. OpenCode uses Bedrock directly for Claude/Kimi and Bedrock Mantle for
-GPT/GLM. GPT uses Mantle's `/openai/v1` Responses route; GLM uses the `/v1`
-OpenAI-compatible route with the transport-only `openai.` prefix removed from
-its model ID. The launcher loads `bedrock_api_key` for both paths and pins
-OpenCode's small-model work to the selected benchmark model. Harbor stores
-environment references rather than secret values in job configuration.
+Override the pins with `CLAUDE_CODE_VERSION`, `OPENCODE_VERSION`, or
+`CODEX_VERSION`. Claude Code uses the fleet instance profile; its main, fast,
+and subagent model aliases are all pinned to the selected benchmark model.
+Claude Code only supports Claude models. OpenCode uses Bedrock directly for
+Claude/Kimi and Bedrock Mantle for GPT/GLM. GPT uses Mantle's `/openai/v1`
+Responses route; GLM uses the `/v1` OpenAI-compatible route with the
+transport-only `openai.` prefix removed from its model ID. The launcher loads
+`bedrock_api_key` for both paths and pins OpenCode's small-model work to the
+selected benchmark model. Codex runs through Bedrock Mantle's `/openai/v1`
+Responses route using the same `bedrock_api_key` secret; it only supports
+OpenAI GPT model IDs and hard-rejects non-GPT models at the launcher. Harbor
+stores environment references rather than secret values in job configuration.
 
 No custom skills, MCP servers, memory, or web-search credentials are enabled.
 For TAU3 runs, the same `bedrock_api_key` secret also configures the simulated

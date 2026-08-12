@@ -21,6 +21,7 @@
 #   run-matrix.sh -k 4                             # same matrix at pass@4
 #   run-matrix.sh -m opus-4.8,sonnet-4.6 -k 2      # just two models
 #   run-matrix.sh -a claude-code,opencode           # full supported native matrix
+#   run-matrix.sh -a codex -m gpt-5.6-sol           # single-cell Codex smoke
 #   run-matrix.sh -s 45fed43                       # pin an exact Stan commit
 #   run-matrix.sh -s my-feature-branch             # or a branch/tag
 #
@@ -131,7 +132,7 @@ for agent in "${RAW_AGENT_LIST[@]}"; do
     claude)
       agent="claude-code"
       ;;
-    claude-code|opencode)
+    claude-code|opencode|codex)
       HAS_NATIVE=1
       ;;
     stan*)
@@ -186,6 +187,11 @@ agent_model_incompatibility() {
     claude-code)
       if [[ "$model_id" != *anthropic.claude* ]]; then
         echo "Claude Code requires the Anthropic Claude protocol"
+      fi
+      ;;
+    codex)
+      if [[ "$model_id" != openai.gpt* ]]; then
+        echo "Codex requires an OpenAI GPT model on Bedrock Mantle"
       fi
       ;;
   esac
@@ -362,6 +368,9 @@ for agent in "${AGENT_LIST[@]}"; do
       ;;
     opencode)
       AGENT_STATE_PARTS+=("${agent}@${OPENCODE_VERSION:-1.18.9}")
+      ;;
+    codex)
+      AGENT_STATE_PARTS+=("${agent}@${CODEX_VERSION:-unpinned}")
       ;;
     *)
       AGENT_STATE_PARTS+=("$agent")

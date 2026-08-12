@@ -142,7 +142,7 @@ def _resolve_aws_creds() -> dict[str, str]:
 # need to forward the orchestrator's creds (avoids token expiry + creds in argv).
 _aws_creds = {} if IAM_INSTANCE_PROFILE else _resolve_aws_creds()
 
-_native_agents = {"claude-code", "opencode"}
+_native_agents = {"claude-code", "opencode", "codex"}
 _is_native_agent = HARBOR_AGENT in _native_agents
 if _is_native_agent and not HARBOR_MODEL_NAME:
     raise SystemExit(
@@ -216,6 +216,25 @@ elif _is_native_agent and HARBOR_AGENT == "opencode":
         # Harbor resolves host-env templates at construction and persists the
         # templates, not the secret values, in the job configuration.
         _agent_env["AWS_BEARER_TOKEN_BEDROCK"] = "${AWS_BEARER_TOKEN_BEDROCK}"
+elif _is_native_agent and HARBOR_AGENT == "codex":
+    # Codex reads OPENAI_API_KEY and OPENAI_BASE_URL through its
+    # ModelConnectionSpec(default_provider="openai"). run-benchmark.sh sets
+    # both via configure_codex_mantle before invoking this script.
+    missing = [
+        key
+        for key in ("OPENAI_API_KEY", "CODEX_OPENAI_BASE_URL")
+        if not os.environ.get(key)
+    ]
+    if not DRY_RUN and missing:
+        raise SystemExit(
+            f"{', '.join(missing)} required for Codex Mantle runs."
+        )
+    _agent_env.update(
+        {
+            "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+            "OPENAI_BASE_URL": "${CODEX_OPENAI_BASE_URL}",
+        }
+    )
 elif not _is_native_agent and os.environ.get("STRANDS_MODEL"):
     _agent_env["STRANDS_MODEL"] = os.environ["STRANDS_MODEL"]
 
