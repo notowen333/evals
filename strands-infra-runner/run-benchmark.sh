@@ -73,11 +73,10 @@ case "$AGENT" in
   codex)
     AGENT="codex"
     HARBOR_AGENT="codex"
-    # Codex ships fast; pinning matters. Empty ${CODEX_VERSION} lets Harbor's
-    # adapter fall through to `@latest` at install time, but the VERSION_TAG
-    # then reads as an empty @ segment in the job name. Require an explicit
-    # version so runs stay reproducible.
-    AGENT_VERSION="${CODEX_VERSION:?CODEX_VERSION must be set (e.g. 0.118.0)}"
+    # Pin an explicit default so back-to-back runs of the same command hit the
+    # same CLI. Codex publishes weekly; bump this alongside intentional matrix
+    # refreshes rather than letting `@latest` drift silently.
+    AGENT_VERSION="${CODEX_VERSION:-0.147.0}"
     VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
     AGENT_PATH=""
     ;;

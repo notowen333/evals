@@ -181,7 +181,7 @@ installed-agent adapters. No local wrapper directory is required.
 |-------|------------------------|--------------------|
 | `claude-code` | `2.1.220` | Raw Bedrock model ID |
 | `opencode` | `1.18.9` | `amazon-bedrock/<model-id>` or `openai/<model-id>` |
-| `codex` | required via `CODEX_VERSION` | Bare model ID (e.g. `openai.gpt-5.6-sol`); auth flows via `OPENAI_API_KEY` / `OPENAI_BASE_URL` |
+| `codex` | `0.147.0` | Bare model ID (e.g. `openai.gpt-5.6-sol`); auth flows via `OPENAI_API_KEY` / `OPENAI_BASE_URL` |
 
 Override the pins with `CLAUDE_CODE_VERSION`, `OPENCODE_VERSION`, or
 `CODEX_VERSION`. Claude Code uses the fleet instance profile; its main, fast,

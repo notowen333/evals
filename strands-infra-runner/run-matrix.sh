@@ -370,7 +370,7 @@ for agent in "${AGENT_LIST[@]}"; do
       AGENT_STATE_PARTS+=("${agent}@${OPENCODE_VERSION:-1.18.9}")
       ;;
     codex)
-      AGENT_STATE_PARTS+=("${agent}@${CODEX_VERSION:-unpinned}")
+      AGENT_STATE_PARTS+=("${agent}@${CODEX_VERSION:-0.147.0}")
       ;;
     *)
       AGENT_STATE_PARTS+=("$agent")
