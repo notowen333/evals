@@ -8,6 +8,7 @@
 #   run-benchmark stan sonnet-4.6 terminal-bench/terminal-bench-2-1
 #   run-benchmark claude-code sonnet-4.6 swe-bench/swe-bench-verified 500
 #   run-benchmark opencode sonnet-4.6 swe-bench/swe-bench-verified 500
+#   run-benchmark omp sonnet-4.6 swe-bench/swe-bench-verified 500
 #
 # Results upload to: s3://strands-benchmark-results/<agent>/<model>/<dataset-slug>/
 # Local results at:  jobs/<agent>@<commit-sha>--<model>--<dataset-slug>/
@@ -69,13 +70,22 @@ case "$AGENT" in
     VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
     AGENT_PATH=""
     ;;
+  omp)
+    AGENT="omp"
+    HARBOR_AGENT="omp"
+    # Omp publishes on a fast cadence; pin a default so identical
+    # invocations produce identical CLI installs.
+    AGENT_VERSION="${OMP_VERSION:-17.2.15}"
+    VERSION_TAG="${VERSION_TAG:-$AGENT_VERSION}"
+    AGENT_PATH=""
+    ;;
   *)
     if [ -d "${AGENTS_DIR}/${AGENT}" ]; then
       HARBOR_AGENT="strands_evals.benchmarks.harbor.installed.py:StrandsInstalledPyAgent"
       AGENT_PATH="${AGENTS_DIR}/${AGENT}"
     else
       echo "Agent not found: ${AGENTS_DIR}/${AGENT}" >&2
-      echo "Native agents: claude-code opencode" >&2
+      echo "Native agents: claude-code opencode omp" >&2
       echo "Custom agents: $(ls "${AGENTS_DIR}" 2>/dev/null | tr '\n' ' ')" >&2
       exit 1
     fi
@@ -125,6 +135,19 @@ case "$HARBOR_AGENT" in
       HARBOR_MODEL_NAME="amazon-bedrock/${MODEL_ID}"
     fi
     ;;
+  omp)
+    # Omp's CLI takes `--provider <p> --model <m>`, and its Harbor adapter
+    # splits on the first `/`. Anything not routed elsewhere goes to
+    # amazon-bedrock; the fleet's instance profile handles auth via IMDS.
+    if [[ "$MODEL_ID" == openai.gpt* ]]; then
+      # Mantle GPT: omp's openai provider reads OPENAI_BASE_URL, so route it
+      # like OpenCode does.
+      HARBOR_MODEL_NAME="openai/${MODEL_ID}"
+      OMP_MANTLE_BASE_URL="https://bedrock-mantle.${TAU3_MANTLE_REGION:-us-east-1}.api.aws/openai/v1"
+    else
+      HARBOR_MODEL_NAME="amazon-bedrock/${MODEL_ID}"
+    fi
+    ;;
 esac
 
 # --- Instance type (always xlarge to handle any task's resource requirements) ---
@@ -152,6 +175,9 @@ if [ -n "$HARBOR_MODEL_NAME" ]; then
 fi
 if [ -n "$OPENCODE_MANTLE_BASE_URL" ]; then
   echo "  Mantle URL:  $OPENCODE_MANTLE_BASE_URL"
+fi
+if [ -n "${OMP_MANTLE_BASE_URL:-}" ]; then
+  echo "  Mantle URL:  $OMP_MANTLE_BASE_URL"
 fi
 echo "  Dataset:     $DATASET"
 echo "  Harbor ref:  $HARBOR_REF"
@@ -293,6 +319,20 @@ configure_opencode_model() {
   fi
 }
 
+configure_omp_model() {
+  # Omp's Bedrock provider reads AWS creds via the standard chain (env →
+  # shared credentials → IMDS), so amazon-bedrock/* runs on the fleet pick
+  # up the instance profile transparently — no extra plumbing here. Mantle
+  # GPT is the only case that needs bearer-token / base-URL forwarding.
+  if [[ "$HARBOR_MODEL_NAME" == openai/* ]]; then
+    load_bedrock_api_key
+    export OPENAI_API_KEY="$BEDROCK_API_KEY_VALUE"
+    export OMP_OPENAI_BASE_URL="$OMP_MANTLE_BASE_URL"
+    export OPENAI_BASE_URL="$OMP_MANTLE_BASE_URL"
+    echo "Configured Omp with the Bedrock Mantle OpenAI-compatible endpoint."
+  fi
+}
+
 configure_tau3_mantle() {
   local mantle_region="${TAU3_MANTLE_REGION:-us-east-1}"
 
@@ -310,6 +350,10 @@ configure_tau3_mantle() {
 
 if [ "$HARBOR_AGENT" = "opencode" ]; then
   configure_opencode_model
+fi
+
+if [ "$HARBOR_AGENT" = "omp" ]; then
+  configure_omp_model
 fi
 
 if [[ "$DATASET" == sierra-research/tau3-bench* || "$DATASET" == "$STRANDS_HARNESS_DATASET" ]]; then

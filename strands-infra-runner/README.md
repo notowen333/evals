@@ -30,7 +30,7 @@ derives it from `STAN_BRANCH` when `VERSION_TAG` is unset.
 
 | Component | Source | Example |
 |-----------|--------|---------|
-| agent | First arg | `stan`, `claude-code`, or `opencode` |
+| agent | First arg | `stan`, `claude-code`, `opencode`, or `omp` |
 | version | Stan commit or native product version | `2c58790` or `2.1.220` |
 | model | Second arg (alias) | `opus-4.6` |
 | dataset-slug | Third arg with `/` → `-` | `terminal-bench-terminal-bench-2-1` |
@@ -50,7 +50,7 @@ run-benchmark.sh <agent> <model> <dataset> [concurrency]
 
 | Arg | What to pass | Default |
 |-----|-------------|---------|
-| `agent` | `claude-code`, `opencode`, or a directory under `strands-infra-runner/agents/` | required |
+| `agent` | `claude-code`, `opencode`, `omp`, or a directory under `strands-infra-runner/agents/` | required |
 | `model` | Alias or raw Bedrock model ID | required |
 | `dataset` | Harbor dataset path | required |
 | `concurrency` | Parallel EC2 instances | Dataset task count, capped at 2,000; 500 for unknown datasets |
@@ -86,6 +86,7 @@ Kimi runs through Bedrock Runtime in `us-east-1`. See the
 | `STAN_BRANCH` | Git ref to install Stan from | `main` |
 | `CLAUDE_CODE_VERSION` | Claude Code CLI version installed by Harbor | `2.1.220` |
 | `OPENCODE_VERSION` | OpenCode CLI version installed by Harbor | `1.18.9` |
+| `OMP_VERSION` | Omp (Oh-My-Pi) CLI version installed by Harbor | `17.2.15` |
 | `HARBOR_STRANDS_CHECKOUT` | Separate Harbor fork checkout used by the custom benchmark | `/home/ubuntu/harbor-strands-working` |
 | `INSTANCE_TYPE` | Fleet node instance type | `m7i.xlarge` |
 | `BEDROCK_API_KEY_SECRET_ID` | Bedrock bearer-token secret used by OpenCode and TAU3 | `bedrock_api_key` |
@@ -110,6 +111,9 @@ bash strands-infra-runner/run-benchmark.sh claude-code sonnet-4.6 swe-bench/swe-
 
 # OpenCode through Bedrock and Harbor's native adapter
 bash strands-infra-runner/run-benchmark.sh opencode sonnet-4.6 swe-bench/swe-bench-verified
+
+# Omp (Oh-My-Pi) through Bedrock — the fleet instance profile handles auth
+bash strands-infra-runner/run-benchmark.sh omp sonnet-4.6 swe-bench/swe-bench-verified
 
 # Full supported pass@2 index matrix for both native products
 setsid bash strands-infra-runner/run-matrix.sh \
@@ -181,8 +185,8 @@ S3 versioning is enabled on the results bucket.
 ### What `run-benchmark.sh` does
 
 1. Resolves agent path, model ID, job name
-2. Selects Harbor's native adapter for `claude-code` and `opencode`; other
-   agents continue through the custom Strands adapter
+2. Selects Harbor's native adapter for `claude-code`, `opencode`, and `omp`;
+   other agents continue through the custom Strands adapter
 3. For `stan` agents: fetches PAT from Secrets Manager, pip installs Stan,
    copies `strands_stan/` into agent dir so containers can import it
 4. For TAU3: fetches `bedrock_api_key` and configures the simulated user and
@@ -224,6 +228,16 @@ Harbor receives the OpenCode credential as the environment reference
 construction and is not written into the launcher argv or persisted job
 configuration. TAU3 also uses the same secret for its simulated user and
 assertion grader through Bedrock Mantle. Claude Code does not receive it.
+
+Omp (Oh-My-Pi) is a fork of Mario Zechner's Pi with a bundled Bedrock
+provider that does its own SigV4 signing and reads AWS credentials via the
+standard chain (env → shared credentials → IMDS), so on the fleet the
+instance profile is picked up transparently — no bearer token forwarding
+needed for `amazon-bedrock/*` model IDs. Only Mantle GPT
+(`openai.gpt-5.6-sol` and friends) needs the OpenAI-compat plumbing, at
+which point the launcher fetches `bedrock_api_key` and exports it as
+`OPENAI_API_KEY` alongside `OMP_OPENAI_BASE_URL`. `OMP_VERSION` pins the
+CLI version (default `17.2.15`) and gets baked into the job name.
 
 ### Hard-won learnings
 
